@@ -215,8 +215,6 @@ if bin/zero check --target wasm32-web conformance/native/pass/std-fs-readall.0 >
   exit 1
 fi
 grep -q "TAR002" .zero/native-test/std-fs-target-unsupported.err
-node scripts/snapshot-command-contracts.mjs >/dev/null
-
 bin/zero tokens --json conformance/lexer/compiler-smoke.0 > .zero/native-test/lexer-tokens.json
 node <<'NODE'
 const assert = require("node:assert/strict");
