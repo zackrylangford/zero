@@ -1042,6 +1042,7 @@ static const char *std_call_arg_type(const char *name, size_t index) {
 }
 
 static bool type_has_generic_arg(const char *type, const char *name, const char **inner, size_t *inner_len) {
+  if (!type || !name) return false;
   size_t name_len = strlen(name);
   size_t type_len = strlen(type);
   if (type_len <= name_len + 2 || strncmp(type, name, name_len) != 0 || type[name_len] != '<' || type[type_len - 1] != '>') return false;
@@ -1238,7 +1239,7 @@ static bool expr_value_provenance(const Expr *expr, Scope *scope, ValueProvenanc
   if (expr->kind == EXPR_IDENT) {
     if (scope_copy_value_provenance(scope, expr->text, origins)) return true;
     const char *actual = scope_type(scope, expr->text);
-    if (type_is_named_generic(actual, "ref") || type_is_named_generic(actual, "mutref")) {
+    if (actual && (type_is_named_generic(actual, "ref") || type_is_named_generic(actual, "mutref"))) {
       return value_provenance_add(origins, expr->text, scope_binding_scope(scope, expr->text), type_is_named_generic(actual, "mutref"), reference_source_origin_is_local_storage(scope, expr->text));
     }
   }

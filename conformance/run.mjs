@@ -2593,6 +2593,7 @@ for (const [fixture, code] of [
   ["heterogeneous-array-literal.0", /TYP002/],
   ["unknown-function-parameter-type.0", /NAM003/],
   ["unknown-local-generic-type.0", /NAM003/],
+  ["unknown-return-reference-origin.0", /NAM003/],
   ["duplicate-shape-field.0", /NAM004/],
   ["duplicate-enum-case.0", /NAM004/],
   ["duplicate-shape-literal-field.0", /NAM004/],
