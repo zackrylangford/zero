@@ -1,0 +1,11 @@
+shape Item {
+    value: i32,
+}
+
+shape Holder {
+    fun keep<Item>(value: Item) -> Item {
+        return value
+    }
+}
+
+pub fun main() -> Void {}

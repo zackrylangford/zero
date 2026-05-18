@@ -7398,6 +7398,49 @@ static bool type_param_name_known(const ParamVec *primary, const ParamVec *secon
   return false;
 }
 
+static const char *visible_concrete_type_name_kind(const Program *program, const char *name) {
+  if (!name || !name[0]) return NULL;
+  if (is_builtin_type_name(name)) return "built-in type";
+  if (!program) return NULL;
+  if (find_shape(program, name)) return "shape";
+  if (find_enum(program, name)) return "enum";
+  if (find_choice(program, name)) return "choice";
+  if (find_alias(program, name)) return "type alias";
+  for (size_t i = 0; i < program->interfaces.len; i++) {
+    if (strcmp(program->interfaces.items[i].name, name) == 0) return "interface";
+  }
+  return NULL;
+}
+
+static bool validate_type_param_names_do_not_shadow(const Program *program, const ParamVec *params, const ParamVec *outer_params, ZDiag *diag) {
+  if (!params) return true;
+  for (size_t i = 0; i < params->len; i++) {
+    const Param *param = &params->items[i];
+    if (param->is_static || !param->name) continue;
+    if (outer_params) {
+      for (size_t previous = 0; previous < outer_params->len; previous++) {
+        const Param *outer = &outer_params->items[previous];
+        if (outer->is_static || !outer->name) continue;
+        if (strcmp(outer->name, param->name) == 0) {
+          char actual[160];
+          snprintf(actual, sizeof(actual), "type parameter '%s' already exists in the outer generic scope", param->name);
+          return set_diag_detail(diag, 3008, "generic type parameter shadows outer type parameter", param->line, param->column, "distinct generic type parameter name", actual, "rename the inner generic parameter");
+        }
+      }
+    }
+    if (strcmp(param->name, "Self") == 0) {
+      return set_diag_detail(diag, 3008, "generic type parameter shadows Self type", param->line, param->column, "generic type parameter name other than Self", "'Self' is reserved for method Self types", "rename the generic parameter");
+    }
+    const char *kind = visible_concrete_type_name_kind(program, param->name);
+    if (kind) {
+      char actual[160];
+      snprintf(actual, sizeof(actual), "'%s' already names a %s", param->name, kind);
+      return set_diag_detail(diag, 3008, "generic type parameter shadows concrete type name", param->line, param->column, "generic type parameter name that does not reuse a visible type", actual, "rename the generic parameter or the concrete type");
+    }
+  }
+  return true;
+}
+
 static bool program_type_name_known(const Program *program, const ParamVec *primary, const ParamVec *secondary, const char *name, bool allow_self) {
   if (!name || !name[0]) return false;
   if (allow_self && strcmp(name, "Self") == 0) return true;
@@ -7478,11 +7521,13 @@ static bool validate_interface_decl(const Program *program, const InterfaceDecl 
       return set_diag_detail(diag, 3008, "duplicate interface declaration", interface->line, interface->column, "unique interface name", "interface name already declared", "rename one interface");
     }
   }
+  if (!validate_type_param_names_do_not_shadow(program, &interface->type_params, NULL, diag)) return false;
   for (size_t method_index = 0; method_index < interface->methods.len; method_index++) {
     const Function *method = &interface->methods.items[method_index];
     if (method->body.len > 0) {
       return set_diag_detail(diag, 3038, "interface methods cannot have bodies", method->line, method->column, "method signature only", "method body", "move implementation to a concrete shape static method");
     }
+    if (!validate_type_param_names_do_not_shadow(program, &method->type_params, &interface->type_params, diag)) return false;
     if (!validate_type_form(method->return_type, diag, method->line, method->column)) return false;
     if (!validate_type_names(program, method->return_type, &interface->type_params, &method->type_params, true, diag, method->line, method->column)) return false;
     if (!validate_function_error_set(method, diag)) return false;
@@ -7608,6 +7653,7 @@ bool z_check_program(const Program *program, ZDiag *diag) {
   }
   scope_free(&const_scope);
   for (size_t i = 0; i < program->shapes.len; i++) {
+    if (!validate_type_param_names_do_not_shadow(program, &program->shapes.items[i].type_params, NULL, diag)) return false;
     for (size_t type_param_index = 0; type_param_index < program->shapes.items[i].type_params.len; type_param_index++) {
       Param *type_param = &program->shapes.items[i].type_params.items[type_param_index];
       for (size_t previous = 0; previous < type_param_index; previous++) {
@@ -7634,6 +7680,7 @@ bool z_check_program(const Program *program, ZDiag *diag) {
     if (!validate_shape_layout(&program->shapes.items[i], diag)) return false;
     for (size_t method_index = 0; method_index < program->shapes.items[i].methods.len; method_index++) {
       Function *method = &program->shapes.items[i].methods.items[method_index];
+      if (!validate_type_param_names_do_not_shadow(program, &method->type_params, &program->shapes.items[i].type_params, diag)) return false;
       if (!validate_shape_method_type_form(method->return_type, diag, method->line, method->column)) return false;
       if (!validate_type_names(program, method->return_type, &program->shapes.items[i].type_params, &method->type_params, true, diag, method->line, method->column)) return false;
       for (size_t param_index = 0; param_index < method->params.len; param_index++) {
@@ -7693,6 +7740,7 @@ bool z_check_program(const Program *program, ZDiag *diag) {
     }
     if (strcmp(fun->name, "main") == 0) main_fun = fun;
     if (fun->is_test) has_test = true;
+    if (!validate_type_param_names_do_not_shadow(program, &fun->type_params, NULL, diag)) return false;
     if (!validate_type_form(fun->return_type, diag, fun->line, fun->column)) return false;
     if (!validate_type_names(program, fun->return_type, &fun->type_params, NULL, false, diag, fun->line, fun->column)) return false;
     if (!validate_type_param_constraints(program, fun, diag)) return false;

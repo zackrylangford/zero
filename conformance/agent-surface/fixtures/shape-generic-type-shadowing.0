@@ -1,0 +1,9 @@
+shape Item {
+    value: i32,
+}
+
+shape Box<Item> {
+    value: Item,
+}
+
+pub fun main() -> Void {}

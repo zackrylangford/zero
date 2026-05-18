@@ -102,7 +102,7 @@ The native compiler keeps stable codes for implemented control-flow and type rul
 
 - `PAR100`: parser syntax failures such as missing braces, commas, or malformed type argument lists
 - `NAM003`: unknown identifiers
-- `NAM004`: function calls with the wrong number of arguments
+- `NAM004`: duplicate names, wrong call arity, or generic type-name shadowing
 - `IMP001`: unknown package-local imports, with repair id `fix-import-path`
 - `IMP002`: package-local import cycles
 - `IMP003`: duplicate public exports across imported modules

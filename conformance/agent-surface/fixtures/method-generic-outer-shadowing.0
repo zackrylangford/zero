@@ -1,0 +1,9 @@
+shape Box<T> {
+    value: T,
+
+    fun keep<T>(value: T) -> T {
+        return value
+    }
+}
+
+pub fun main() -> Void {}

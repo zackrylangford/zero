@@ -1,0 +1,9 @@
+shape T {
+    value: i32,
+}
+
+fun identity<T>(value: T) -> T {
+    return value
+}
+
+pub fun main() -> Void {}

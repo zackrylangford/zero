@@ -1,0 +1,7 @@
+fun identity<String>(value: String) -> String {
+    return value
+}
+
+pub fun main() -> Void {
+    let value: i32 = identity<i32>(1)
+}

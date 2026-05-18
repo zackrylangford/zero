@@ -433,17 +433,36 @@ assert.equal(checkJsonSuccessBody.incrementalInvalidation.recheckStrategy, "fing
 const agentSurfaceClassification = JSON.parse(await readFile("conformance/agent-surface/classification.json", "utf8"));
 assert.equal(agentSurfaceClassification.schema, 1);
 assert.deepEqual(agentSurfaceClassification.fixtures.map((item) => item.id), [
-  "generic-type-shadowing-current",
+  "generic-type-shadowing",
+  "builtin-generic-type-shadowing",
+  "shape-generic-type-shadowing",
+  "shape-generic-self-shadowing",
+  "method-generic-type-shadowing",
+  "method-generic-outer-shadowing",
+  "method-generic-self-shadowing",
   "borrow-lexical-lifetime",
   "unresolved-package-import",
   "malformed-use-current",
   "owned-drop-direct-backend-unsupported",
 ]);
 
-const agentSurfaceGenericShadowing = await execFileAsync(zero, ["check", "--json", "conformance/agent-surface/fixtures/generic-type-shadowing-current.0"]);
-const agentSurfaceGenericShadowingBody = JSON.parse(agentSurfaceGenericShadowing.stdout);
-assert.equal(agentSurfaceGenericShadowingBody.ok, true);
-assert.equal(agentSurfaceGenericShadowingBody.diagnostics.length, 0);
+async function assertAgentSurfaceGenericShadowing(path, actualPattern) {
+  const result = await execFileAsync(zero, ["check", "--json", path]).catch((error) => error);
+  assert.notEqual(result.code, 0);
+  const body = JSON.parse(result.stdout);
+  assert.equal(body.diagnostics[0].code, "NAM004");
+  assert.match(body.diagnostics[0].message, /generic type parameter shadows/);
+  assert.match(body.diagnostics[0].actual, actualPattern);
+  assert.match(body.diagnostics[0].help, /rename/);
+}
+
+await assertAgentSurfaceGenericShadowing("conformance/agent-surface/fixtures/generic-type-shadowing.0", /already names a shape/);
+await assertAgentSurfaceGenericShadowing("conformance/agent-surface/fixtures/builtin-generic-type-shadowing.0", /already names a built-in type/);
+await assertAgentSurfaceGenericShadowing("conformance/agent-surface/fixtures/shape-generic-type-shadowing.0", /already names a shape/);
+await assertAgentSurfaceGenericShadowing("conformance/agent-surface/fixtures/shape-generic-self-shadowing.0", /reserved for method Self types/);
+await assertAgentSurfaceGenericShadowing("conformance/agent-surface/fixtures/method-generic-type-shadowing.0", /already names a shape/);
+await assertAgentSurfaceGenericShadowing("conformance/agent-surface/fixtures/method-generic-outer-shadowing.0", /outer generic scope/);
+await assertAgentSurfaceGenericShadowing("conformance/agent-surface/fixtures/method-generic-self-shadowing.0", /reserved for method Self types/);
 
 const agentSurfaceBorrowLifetime = await execFileAsync(zero, ["check", "--json", "conformance/agent-surface/fixtures/borrow-lexical-lifetime.0"]).catch((error) => error);
 assert.notEqual(agentSurfaceBorrowLifetime.code, 0);
