@@ -259,13 +259,21 @@ static void source_input_push_module(SourceInput *input, const char *name, const
   input->module_count++;
 }
 
-static void source_input_push_import_edge(SourceInput *input, const char *from, const char *to, const char *path) {
+static void source_input_push_import_edge(SourceInput *input, const char *from, const char *to, const char *path, const char *source_path, int line, int column, int length) {
   input->import_from = realloc(input->import_from, (input->import_edge_count + 1) * sizeof(char *));
   input->import_to = realloc(input->import_to, (input->import_edge_count + 1) * sizeof(char *));
   input->import_paths = realloc(input->import_paths, (input->import_edge_count + 1) * sizeof(char *));
+  input->import_source_paths = realloc(input->import_source_paths, (input->import_edge_count + 1) * sizeof(char *));
+  input->import_lines = realloc(input->import_lines, (input->import_edge_count + 1) * sizeof(int));
+  input->import_columns = realloc(input->import_columns, (input->import_edge_count + 1) * sizeof(int));
+  input->import_lengths = realloc(input->import_lengths, (input->import_edge_count + 1) * sizeof(int));
   input->import_from[input->import_edge_count] = z_strdup(from);
   input->import_to[input->import_edge_count] = z_strdup(to);
   input->import_paths[input->import_edge_count] = z_strdup(path ? path : "");
+  input->import_source_paths[input->import_edge_count] = z_strdup(source_path ? source_path : "");
+  input->import_lines[input->import_edge_count] = line > 0 ? line : 1;
+  input->import_columns[input->import_edge_count] = column > 0 ? column : 1;
+  input->import_lengths[input->import_edge_count] = length > 0 ? length : 1;
   input->import_edge_count++;
 }
 
@@ -545,12 +553,13 @@ static void import_line_append_span(ZBuf *buf, const char *text, size_t len) {
   for (size_t i = 0; i < len; i++) zbuf_append_char(buf, text[i]);
 }
 
-static bool parse_use_import_line_module(const char *text, size_t len, char **module_out) {
+static bool parse_use_import_line_module(const char *text, size_t len, char **module_out, int *length_out) {
   size_t pos = 0;
   import_line_skip_ws(text, len, &pos);
   ZBuf module;
   zbuf_init(&module);
   bool wrote_segment = false;
+  size_t last_token_end = 0;
   for (;;) {
     const char *segment = NULL;
     size_t segment_len = 0;
@@ -561,6 +570,7 @@ static bool parse_use_import_line_module(const char *text, size_t len, char **mo
     if (wrote_segment) zbuf_append_char(&module, '.');
     import_line_append_span(&module, segment, segment_len);
     wrote_segment = true;
+    last_token_end = pos;
     import_line_skip_ws(text, len, &pos);
     if (pos < len && text[pos] == '.') {
       pos++;
@@ -586,6 +596,7 @@ static bool parse_use_import_line_module(const char *text, size_t len, char **mo
       zbuf_free(&module);
       return false;
     }
+    last_token_end = pos;
     import_line_skip_ws(text, len, &pos);
     if (import_line_comment_at(text, pos, len)) pos = len;
     if (pos < len) {
@@ -594,11 +605,21 @@ static bool parse_use_import_line_module(const char *text, size_t len, char **mo
     }
   }
   *module_out = module.data ? module.data : z_strdup("");
+  if (length_out) *length_out = 3 + (int)last_token_end;
   return true;
 }
 
-static bool scan_imports_and_append_dependencies(const char *source, const char *src_root, const char *current_module, SourceInput *input, ZBuf *combined, ZDiag *diag, char ***stack, size_t *stack_len) {
+static void set_import_source_diag(ZDiag *diag, int code, const char *path, int line, int column, int length) {
+  diag->code = code;
+  diag->path = z_strdup(path ? path : "");
+  diag->line = line > 0 ? line : 1;
+  diag->column = column > 0 ? column : 1;
+  diag->length = length > 0 ? length : 1;
+}
+
+static bool scan_imports_and_append_dependencies(const char *source, const char *src_root, const char *current_module, const char *current_path, SourceInput *input, ZBuf *combined, ZDiag *diag, char ***stack, size_t *stack_len) {
   const char *line = source;
+  int original_line = 1;
   while (*line && diag->code == 0) {
     const char *end = strchr(line, '\n');
     size_t len = end ? (size_t)(end - line) : strlen(line);
@@ -608,8 +629,10 @@ static bool scan_imports_and_append_dependencies(const char *source, const char 
       len--;
     }
     char *module_name = NULL;
+    int import_column = (int)(start - line) + 1;
+    int import_length = (int)len;
     if (len > 3 && strncmp(start, "use", 3) == 0 && isspace((unsigned char)start[3])) {
-      parse_use_import_line_module(start + 3, len - 3, &module_name);
+      parse_use_import_line_module(start + 3, len - 3, &module_name, &import_length);
     } else if (len >= 7 && strncmp(start, "import ", 7) == 0) {
       const char *module = start + 7;
       size_t module_len = len - 7;
@@ -623,36 +646,46 @@ static bool scan_imports_and_append_dependencies(const char *source, const char 
       }
       if (as_kw) module_len = (size_t)(as_kw - module);
       module_name = z_strndup(module, module_len);
+      import_length = 7 + (int)module_len;
     }
     if (module_name) {
       if (strncmp(module_name, "std.", 4) == 0) {
         free(module_name);
-        if (!end) break;
-        line = end + 1;
-        continue;
-      }
-      source_input_push_import(input, module_name);
-      char *module_path = module_path_to_source(src_root, module_name);
-      if (!module_path) {
-        diag->code = 7001;
-        diag->path = input->source_file;
-        diag->line = 1;
-        diag->column = 1;
-        snprintf(diag->message, sizeof(diag->message), "unknown package-local import '%s'", module_name);
-        snprintf(diag->expected, sizeof(diag->expected), "src/%s.0 or src/%s/mod.0", module_name, module_name);
-        snprintf(diag->actual, sizeof(diag->actual), "missing source file");
-        snprintf(diag->help, sizeof(diag->help), "create the module source file or remove the import");
+      } else {
+        source_input_push_import(input, module_name);
+        char *module_path = module_path_to_source(src_root, module_name);
+        if (!module_path) {
+          set_import_source_diag(diag, 7001, current_path, original_line, import_column, import_length);
+          snprintf(diag->message, sizeof(diag->message), "unknown package-local import '%s'", module_name);
+          snprintf(diag->expected, sizeof(diag->expected), "src/%s.0 or src/%s/mod.0", module_name, module_name);
+          snprintf(diag->actual, sizeof(diag->actual), "missing source file");
+          snprintf(diag->help, sizeof(diag->help), "create the module source file or remove the import");
+          free(module_name);
+          return false;
+        }
+        if (import_stack_contains(*stack, *stack_len, module_path)) {
+          ZBuf chain;
+          zbuf_init(&chain);
+          format_cycle_chain(src_root, *stack, *stack_len, module_path, &chain);
+          set_import_source_diag(diag, 7002, current_path, original_line, import_column, import_length);
+          snprintf(diag->message, sizeof(diag->message), "import cycle detected");
+          snprintf(diag->actual, sizeof(diag->actual), "%s", chain.data ? chain.data : module_path);
+          snprintf(diag->help, sizeof(diag->help), "break the module cycle by moving shared declarations into a third module");
+          zbuf_free(&chain);
+          free(module_path);
+          free(module_name);
+          return false;
+        }
+        source_input_push_import_edge(input, current_module, module_name, module_path, current_path, original_line, import_column, import_length);
+        bool ok = resolve_imported_source(module_path, src_root, input, combined, diag, stack, stack_len);
+        free(module_path);
         free(module_name);
-        return false;
+        if (!ok) return false;
       }
-      source_input_push_import_edge(input, current_module, module_name, module_path);
-      bool ok = resolve_imported_source(module_path, src_root, input, combined, diag, stack, stack_len);
-      free(module_path);
-      free(module_name);
-      if (!ok) return false;
     }
     if (!end) break;
     line = end + 1;
+    original_line++;
   }
   return diag->code == 0;
 }
@@ -664,9 +697,10 @@ static bool resolve_imported_source(const char *path, const char *src_root, Sour
     zbuf_init(&chain);
     format_cycle_chain(src_root, *stack, *stack_len, path, &chain);
     diag->code = 7002;
-    diag->path = input->source_file;
+    diag->path = z_strdup(input->source_file);
     diag->line = 1;
     diag->column = 1;
+    diag->length = 1;
     snprintf(diag->message, sizeof(diag->message), "import cycle detected");
     snprintf(diag->actual, sizeof(diag->actual), "%s", chain.data ? chain.data : path);
     snprintf(diag->help, sizeof(diag->help), "break the module cycle by moving shared declarations into a third module");
@@ -678,7 +712,7 @@ static bool resolve_imported_source(const char *path, const char *src_root, Sour
   char *module_name = module_name_from_path(src_root, path);
   *stack = realloc(*stack, (*stack_len + 1) * sizeof(char *));
   (*stack)[(*stack_len)++] = z_strdup(path);
-  bool ok = scan_imports_and_append_dependencies(source, src_root, module_name, input, combined, diag, stack, stack_len);
+  bool ok = scan_imports_and_append_dependencies(source, src_root, module_name, path, input, combined, diag, stack, stack_len);
   free((*stack)[--(*stack_len)]);
   if (ok) ok = scan_top_level_symbols(source, module_name, input, diag);
   if (ok) {
@@ -1372,6 +1406,7 @@ void z_free_source(SourceInput *input) {
     free(input->import_from[i]);
     free(input->import_to[i]);
     free(input->import_paths[i]);
+    free(input->import_source_paths[i]);
   }
   for (size_t i = 0; i < input->symbol_count; i++) {
     free(input->symbol_names[i]);
@@ -1397,6 +1432,10 @@ void z_free_source(SourceInput *input) {
   free(input->import_from);
   free(input->import_to);
   free(input->import_paths);
+  free(input->import_source_paths);
+  free(input->import_lines);
+  free(input->import_columns);
+  free(input->import_lengths);
   free(input->symbol_names);
   free(input->symbol_modules);
   free(input->symbol_kinds);

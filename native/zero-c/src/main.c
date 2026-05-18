@@ -2399,6 +2399,7 @@ static const char *diag_repair_id(int code) {
     case 1002: return "add-missing-error-name";
     case 1003: return "check-or-rescue-fallible-call";
     case 7001: return "fix-import-path";
+    case 7002: return "break-import-cycle";
     case 3003: return "declare-missing-symbol";
     case 3007: return "match-return-type";
     case 3010: return "make-binding-mutable";
@@ -2448,6 +2449,7 @@ static const char *diag_repair_summary(int code) {
     case 1002: return "Add the missing error name to raises { ... } or rescue the call locally.";
     case 1003: return "Wrap the fallible call in check or rescue so error flow is explicit.";
     case 7001: return "Change the import to a package-local module path that resolves under src/.";
+    case 7002: return "Break the import cycle by moving shared declarations into a third module or removing one import edge.";
     case 3003: return "Declare the referenced symbol, import the module that provides it, or correct the identifier spelling.";
     case 3007: return "Change the returned expression or the function return annotation so both types agree.";
     case 3010: return "Change the root binding to let mut before passing it to a mutable API.";
@@ -8293,6 +8295,19 @@ static const char *resolved_path_for_import(const SourceInput *input, const char
   return NULL;
 }
 
+static void append_source_range_json(ZBuf *buf, const char *path, int line, int column, int length) {
+  int start_line = line > 0 ? line : 1;
+  int start_column = column > 0 ? column : 1;
+  int end_column = start_column + (length > 0 ? length : 1);
+  zbuf_append(buf, "{\"path\":");
+  append_json_string(buf, path ? path : "");
+  zbuf_appendf(buf, ",\"start\":{\"line\":%d,\"column\":%d},\"end\":{\"line\":%d,\"column\":%d},\"columnUnit\":\"utf8-byte\"}",
+               start_line,
+               start_column,
+               start_line,
+               end_column);
+}
+
 static void append_use_imports_json(ZBuf *buf, const SourceInput *input, const Program *program) {
   zbuf_append(buf, "[");
   for (size_t i = 0; program && i < program->use_imports.len; i++) {
@@ -8435,6 +8450,12 @@ static void append_graph_json(ZBuf *buf, const SourceInput *input, const Program
     append_json_string(buf, input->import_to[i]);
     zbuf_append(buf, ",\"path\":");
     append_json_string(buf, input->import_paths[i]);
+    zbuf_append(buf, ",\"sourceRange\":");
+    append_source_range_json(buf,
+                             input->import_source_paths ? input->import_source_paths[i] : "",
+                             input->import_lines ? input->import_lines[i] : 1,
+                             input->import_columns ? input->import_columns[i] : 1,
+                             input->import_lengths ? input->import_lengths[i] : 1);
     zbuf_append(buf, "}");
   }
   zbuf_append(buf, "],\n");

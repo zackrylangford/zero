@@ -1454,7 +1454,19 @@ assert.notEqual(missingImportJson.code, 0);
 const missingImportBody = JSON.parse(missingImportJson.stdout);
 assert.equal(missingImportBody.diagnostics[0].code, "IMP001");
 assert.match(missingImportBody.diagnostics[0].message, /unknown package-local import/);
+assert.equal(missingImportBody.diagnostics[0].path, "conformance/check/fail/missing-import/src/main.0");
+assert.equal(missingImportBody.diagnostics[0].line, 1);
+assert.equal(missingImportBody.diagnostics[0].column, 1);
+assert.equal(missingImportBody.diagnostics[0].length, 11);
 assert.equal(missingImportBody.diagnostics[0].fixSafety, "requires-human-review");
+
+const missingImportFixPlan = await execFileAsync(zero, ["fix", "--plan", "--json", "conformance/check/fail/missing-import"]);
+const missingImportFixPlanBody = JSON.parse(missingImportFixPlan.stdout);
+assert.equal(missingImportFixPlanBody.diagnostics[0].path, "conformance/check/fail/missing-import/src/main.0");
+assert.equal(missingImportFixPlanBody.diagnostics[0].line, 1);
+assert.equal(missingImportFixPlanBody.diagnostics[0].column, 1);
+assert.equal(missingImportFixPlanBody.diagnostics[0].length, 11);
+assert.equal(missingImportFixPlanBody.fixes[0].id, "fix-import-path");
 
 const importLineMapJson = await execFileAsync(zero, ["check", "--json", "conformance/check/fail/import-line-map"]).catch((error) => error);
 assert.notEqual(importLineMapJson.code, 0);
@@ -1486,6 +1498,19 @@ const importCycleBody = JSON.parse(importCycleJson.stdout);
 assert.equal(importCycleBody.diagnostics[0].code, "IMP002");
 assert.match(importCycleBody.diagnostics[0].message, /import cycle/);
 assert.match(importCycleBody.diagnostics[0].actual, /a -> b -> a/);
+assert.equal(importCycleBody.diagnostics[0].path, "conformance/check/fail/import-cycle/src/b.0");
+assert.equal(importCycleBody.diagnostics[0].line, 1);
+assert.equal(importCycleBody.diagnostics[0].column, 1);
+assert.equal(importCycleBody.diagnostics[0].length, 5);
+assert.equal(importCycleBody.diagnostics[0].repair.id, "break-import-cycle");
+
+const importCycleFixPlan = await execFileAsync(zero, ["fix", "--plan", "--json", "conformance/check/fail/import-cycle"]);
+const importCycleFixPlanBody = JSON.parse(importCycleFixPlan.stdout);
+assert.equal(importCycleFixPlanBody.diagnostics[0].path, "conformance/check/fail/import-cycle/src/b.0");
+assert.equal(importCycleFixPlanBody.diagnostics[0].line, 1);
+assert.equal(importCycleFixPlanBody.diagnostics[0].column, 1);
+assert.equal(importCycleFixPlanBody.diagnostics[0].length, 5);
+assert.equal(importCycleFixPlanBody.fixes[0].id, "break-import-cycle");
 
 const duplicatePublicJson = await execFileAsync(zero, ["check", "--json", "conformance/check/fail/duplicate-public"]).catch((error) => error);
 assert.notEqual(duplicatePublicJson.code, 0);
@@ -1498,6 +1523,10 @@ assert.notEqual(unresolvedNestedImportJson.code, 0);
 const unresolvedNestedImportBody = JSON.parse(unresolvedNestedImportJson.stdout);
 assert.equal(unresolvedNestedImportBody.diagnostics[0].code, "IMP001");
 assert.match(unresolvedNestedImportBody.diagnostics[0].expected, /src\/missing\.0/);
+assert.equal(unresolvedNestedImportBody.diagnostics[0].path, "conformance/check/fail/unresolved-nested-import/src/worker.0");
+assert.equal(unresolvedNestedImportBody.diagnostics[0].line, 1);
+assert.equal(unresolvedNestedImportBody.diagnostics[0].column, 1);
+assert.equal(unresolvedNestedImportBody.diagnostics[0].length, 11);
 
 const duplicatePublicLargeJson = await execFileAsync(zero, ["check", "--json", "conformance/check/fail/duplicate-public-large"]).catch((error) => error);
 assert.notEqual(duplicatePublicLargeJson.code, 0);
@@ -1770,6 +1799,10 @@ assert(importGraphBody.sourceMaps.every((item) => item.columnUnit === "utf8-byte
 assert.deepEqual(importGraphBody.targets.map((item) => item.name), ["cli"]);
 assert.deepEqual(importGraphBody.modules.map((item) => item.name), ["math", "types", "main"]);
 assert.deepEqual(importGraphBody.importEdges.map((item) => `${item.from}->${item.to}`), ["main->math", "main->types"]);
+assert.deepEqual(importGraphBody.importEdges.map((item) => `${item.from}->${item.to}:${item.sourceRange.path}:${item.sourceRange.start.line}:${item.sourceRange.start.column}:${item.sourceRange.end.column}`), [
+  "main->math:conformance/check/pass/imports/src/main.0:1:1:9",
+  "main->types:conformance/check/pass/imports/src/main.0:2:1:10",
+]);
 assert.deepEqual(importGraphBody.useImports.map((item) => `${item.from}->${item.to}:${item.kind}:${item.line}:${item.column}`), [
   "main->math:package-local:1:1",
   "main->types:package-local:2:1",

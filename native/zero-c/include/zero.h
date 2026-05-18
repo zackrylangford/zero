@@ -643,6 +643,10 @@ typedef struct {
   char **import_from;
   char **import_to;
   char **import_paths;
+  char **import_source_paths;
+  int *import_lines;
+  int *import_columns;
+  int *import_lengths;
   char **symbol_names;
   char **symbol_modules;
   char **symbol_kinds;
