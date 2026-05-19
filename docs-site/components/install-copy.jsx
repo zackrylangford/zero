@@ -11,7 +11,7 @@ const TABS = [
   {
     id: "agents",
     label: "For agents",
-    command: "npx skills add vercel-labs/zero",
+    command: "pnpm dlx skills add vercel-labs/zero",
   },
 ];
 
