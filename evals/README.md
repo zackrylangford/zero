@@ -14,6 +14,19 @@ Run live in Vercel Sandbox through Claude Code and Vercel AI Gateway:
 AI_GATEWAY_API_KEY=... pnpm evals -- --case hello-world
 ```
 
+By default, evals run each selected case against:
+
+- `anthropic/claude-opus-4.7`
+- `anthropic/claude-sonnet-4.6`
+
+Override the model set with repeated `--model` flags or a comma-separated
+`--models` value:
+
+```sh
+pnpm evals -- --case hello-world --model anthropic/claude-sonnet-4.6
+pnpm evals -- --case hello-world --models anthropic/claude-opus-4.7,anthropic/claude-sonnet-4.6
+```
+
 Live evals create a Vercel Sandbox, upload the current checkout, build the
 native compiler, install Claude Code, and run the agent inside the sandbox. The
 sandbox network policy injects the AI Gateway bearer credential for
@@ -28,10 +41,13 @@ VERCEL_OIDC_TOKEN=...
 
 # AI Gateway auth
 AI_GATEWAY_API_KEY=...
-# or ANTHROPIC_AUTH_TOKEN=...
+
+# Model selection
+ZERO_EVAL_MODELS=anthropic/claude-opus-4.7,anthropic/claude-sonnet-4.6
+# or ZERO_EVAL_MODEL=anthropic/claude-sonnet-4.6
 ```
 
-The model must load Zero's version-matched skill through
+Each live model run must load Zero's version-matched skill through
 `bin/zero skills get zero --full`, then use `bin/zero check` and `bin/zero run`
 inside the sandbox to verify its candidate.
 

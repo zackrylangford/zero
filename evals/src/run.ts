@@ -19,7 +19,7 @@ interface RunOptions {
   json: boolean;
   keepAlive: boolean;
   maxTurns: number;
-  model: string;
+  models: string[];
   outDir: string;
   sandboxRuntime: string;
   sandboxTimeoutMs: number;
@@ -90,6 +90,10 @@ const AI_GATEWAY_HOST = "ai-gateway.vercel.sh";
 const AI_GATEWAY_URL = `https://${AI_GATEWAY_HOST}`;
 const DEFAULT_PROJECT_DIR = "/vercel/sandbox/zero-lang";
 const PROMPT_PATH = "/tmp/zero-eval-prompt.txt";
+const DEFAULT_MODELS = [
+  "anthropic/claude-opus-4.7",
+  "anthropic/claude-sonnet-4.6",
+];
 
 const systemPrompt = [
   "You are an agent evaluating a Zero programming task.",
@@ -97,7 +101,7 @@ const systemPrompt = [
   "Use the local ./bin/zero compiler as your source of Zero-specific guidance and verification.",
   "First run ./bin/zero skills get zero --full.",
   "Load any additional skills recommended by that skill before writing code.",
-  "Use ./bin/zero feedback to check and run your candidate.",
+  "Use ./bin/zero check --json to inspect diagnostics, then ./bin/zero run to verify stdout.",
   "For the final answer, output code only: exactly the verified source bytes.",
   "Do not summarize success, mention stdout, add a preamble, or use Markdown fences.",
 ].join("\n");
@@ -109,7 +113,7 @@ async function main() {
 
   if (options.dryRun) {
     printJsonOrText(options.json, {
-      model: options.model,
+      models: options.models,
       gatewayURL: AI_GATEWAY_URL,
       maxTurns: options.maxTurns,
       mode: options.fixture ? "fixture" : "sandbox",
@@ -135,13 +139,15 @@ async function main() {
     }
 
     const results = [];
-    for (const evalCase of selectedCases) {
-      results.push(await runCase(evalCase, options, sandboxContext));
+    for (const model of options.models) {
+      for (const evalCase of selectedCases) {
+        results.push(await runCase(evalCase, model, options, sandboxContext));
+      }
     }
 
     const summary = {
       ok: results.every((result) => result.passed),
-      model: options.model,
+      models: options.models,
       outDir: options.outDir,
       sandboxId: sandboxContext?.sandboxId ?? null,
       sandboxKeptAlive: Boolean(sandboxContext && options.keepAlive),
@@ -213,11 +219,12 @@ async function createSandboxContext(
 
 async function runCase(
   evalCase: EvalCase,
+  model: string,
   options: RunOptions,
   sandboxContext: SandboxContext | null,
 ) {
   const started = performance.now();
-  const caseDir = join(options.outDir, evalCase.id);
+  const caseDir = join(options.outDir, modelPathSegment(model), evalCase.id);
   await rm(caseDir, { force: true, recursive: true });
   await mkdir(caseDir, { recursive: true });
 
@@ -228,7 +235,13 @@ async function runCase(
           steps: [],
           metrics: null,
         }
-      : await runSandboxAgentCase(evalCase, options, sandboxContext, caseDir);
+      : await runSandboxAgentCase(
+          evalCase,
+          model,
+          options,
+          sandboxContext,
+          caseDir,
+        );
 
   const responsePath = join(caseDir, "response.md");
   const stepsPath = options.fixture ? null : join(caseDir, "steps.json");
@@ -242,7 +255,7 @@ async function runCase(
   await writeFile(sourcePath, source);
 
   const validation = sandboxContext
-    ? await validateSourceInSandbox(sandboxContext, evalCase, source)
+    ? await validateSourceInSandbox(sandboxContext, evalCase, model, source)
     : await validateSourceLocally(sourcePath);
   const { check, run, remoteSourcePath } = validation;
 
@@ -257,7 +270,7 @@ async function runCase(
   );
   const agentRequirementFailures = options.fixture
     ? []
-    : getAgentRequirementFailures(agentRun.metrics);
+    : getAgentRequirementFailures(agentRun.metrics, options.maxTurns);
   const actualStdout = run?.stdout ?? "";
   const passed =
     check.code === 0 &&
@@ -282,7 +295,7 @@ async function runCase(
     id: evalCase.id,
     title: evalCase.title,
     passed,
-    model: options.model,
+    model,
     mode: options.fixture ? "fixture" : "sandbox",
     durationMs: Math.round(performance.now() - started),
     sourcePath,
@@ -311,6 +324,7 @@ async function runCase(
 
 async function runSandboxAgentCase(
   evalCase: EvalCase,
+  model: string,
   options: RunOptions,
   context: SandboxContext,
   caseDir: string,
@@ -326,7 +340,7 @@ async function runSandboxAgentCase(
 
   const claudeArgs = [
     "--model",
-    shellQuote(claudeModelName(options.model)),
+    shellQuote(claudeModelName(model)),
     "--output-format",
     "stream-json",
     "--verbose",
@@ -387,9 +401,9 @@ function buildClaudePrompt(
     evalCase.prompt,
     "",
     `Repository root: ${projectDir}`,
-    `You have at most ${options.maxTurns} agent turns before the evaluator gives up.`,
+    `You have at most ${options.maxTurns} agent turns before the evaluator marks the run failed.`,
     "Use shell commands from the repository root. Prefer ./bin/zero, not any global zero binary.",
-    "After the source checks and produces the expected output, return code only.",
+    "After ./bin/zero check and ./bin/zero run confirm the expected output, return code only.",
     "Do not include a success sentence, explanation, or Markdown fence.",
   ].join("\n");
 }
@@ -411,9 +425,12 @@ async function validateSourceLocally(sourcePath: string) {
 async function validateSourceInSandbox(
   context: SandboxContext,
   evalCase: EvalCase,
+  model: string,
   source: string,
 ) {
-  const remoteCaseDir = `/tmp/zero-evals/${evalCase.id}`;
+  const remoteCaseDir = `/tmp/zero-evals/${modelPathSegment(model)}/${
+    evalCase.id
+  }`;
   const remoteSourcePath = `${remoteCaseDir}/candidate.0`;
   await runSandboxCommandChecked(
     context.sandbox,
@@ -692,6 +709,8 @@ function buildAIGatewayNetworkPolicy(gatewayCredential: string): NetworkPolicy {
 function buildClaudeGatewayEnv() {
   return {
     ANTHROPIC_BASE_URL: AI_GATEWAY_URL,
+    // Claude Code expects Anthropic-shaped auth, but the sandbox policy injects
+    // the real AI Gateway bearer token on outbound requests.
     ANTHROPIC_AUTH_TOKEN: "placeholder",
     ANTHROPIC_API_KEY: "",
   };
@@ -699,16 +718,13 @@ function buildClaudeGatewayEnv() {
 
 function resolveGatewayCredential() {
   const credential =
-    process.env.AI_GATEWAY_API_KEY ||
-    process.env.ANTHROPIC_AUTH_TOKEN ||
-    process.env.VERCEL_OIDC_TOKEN;
+    process.env.AI_GATEWAY_API_KEY || process.env.VERCEL_OIDC_TOKEN;
 
   if (!credential) {
     throw new Error(
       [
         "Missing AI Gateway credential.",
-        "Set AI_GATEWAY_API_KEY, set ANTHROPIC_AUTH_TOKEN to an AI Gateway key,",
-        "or run `vercel env pull` to provide VERCEL_OIDC_TOKEN.",
+        "Set AI_GATEWAY_API_KEY or run `vercel env pull` to provide VERCEL_OIDC_TOKEN.",
       ].join(" "),
     );
   }
@@ -717,11 +733,9 @@ function resolveGatewayCredential() {
 }
 
 function resolveSandboxCredentials(): SandboxCredentials {
-  const token = process.env.SANDBOX_VERCEL_TOKEN ?? process.env.VERCEL_TOKEN;
-  const teamId =
-    process.env.SANDBOX_VERCEL_TEAM_ID ?? process.env.VERCEL_TEAM_ID;
-  const projectId =
-    process.env.SANDBOX_VERCEL_PROJECT_ID ?? process.env.VERCEL_PROJECT_ID;
+  const token = process.env.VERCEL_TOKEN;
+  const teamId = process.env.VERCEL_TEAM_ID;
+  const projectId = process.env.VERCEL_PROJECT_ID;
 
   if (token && teamId && projectId) {
     return { token, teamId, projectId };
@@ -793,7 +807,8 @@ function parseArgs(args: string[]): RunOptions {
   let json = false;
   let keepAlive = false;
   let maxTurns = 10;
-  let model = process.env.ZERO_EVAL_MODEL ?? "anthropic/claude-sonnet-4.6";
+  let models = defaultModels();
+  const requestedModels: string[] = [];
   let outDir = join(repoRoot, ".zero", "evals", "runs", timestamp());
   let sandboxRuntime = process.env.ZERO_EVAL_SANDBOX_RUNTIME ?? "node24";
   let sandboxTimeoutMs = parsePositiveIntOrDefault(
@@ -819,7 +834,13 @@ function parseArgs(args: string[]): RunOptions {
     } else if (arg === "--case") {
       caseId = requiredValue(args, ++i, "--case");
     } else if (arg === "--model") {
-      model = requiredValue(args, ++i, "--model");
+      requestedModels.push(
+        ...parseModelList(requiredValue(args, ++i, "--model"), "--model"),
+      );
+    } else if (arg === "--models") {
+      requestedModels.push(
+        ...parseModelList(requiredValue(args, ++i, "--models"), "--models"),
+      );
     } else if (arg === "--max-turns") {
       maxTurns = parsePositiveInt(
         requiredValue(args, ++i, "--max-turns"),
@@ -860,6 +881,10 @@ function parseArgs(args: string[]): RunOptions {
     }
   }
 
+  if (requestedModels.length > 0) {
+    models = uniqueOrdered(requestedModels);
+  }
+
   return {
     caseId,
     dryRun,
@@ -867,13 +892,38 @@ function parseArgs(args: string[]): RunOptions {
     json,
     keepAlive,
     maxTurns,
-    model,
+    models,
     outDir,
     sandboxRuntime,
     sandboxTimeoutMs,
     sandboxVcpus,
     commandTimeoutMs,
   };
+}
+
+function defaultModels() {
+  if (process.env.ZERO_EVAL_MODELS) {
+    return parseModelList(process.env.ZERO_EVAL_MODELS, "ZERO_EVAL_MODELS");
+  }
+  if (process.env.ZERO_EVAL_MODEL) {
+    return parseModelList(process.env.ZERO_EVAL_MODEL, "ZERO_EVAL_MODEL");
+  }
+  return DEFAULT_MODELS;
+}
+
+function parseModelList(value: string, label: string): string[] {
+  const models = value
+    .split(",")
+    .map((model) => model.trim())
+    .filter(Boolean);
+  if (models.length === 0) {
+    throw new Error(`${label} requires at least one model id`);
+  }
+  return uniqueOrdered(models);
+}
+
+function uniqueOrdered(values: string[]) {
+  return values.filter((value, index) => values.indexOf(value) === index);
 }
 
 function selectCases(caseId: string | null) {
@@ -950,14 +1000,22 @@ function failureReason(input: {
     return "final response included prose or Markdown";
   }
   if (input.agentRequirementFailures.length > 0) {
-    return "agent did not use required Zero CLI feedback";
+    return "agent did not satisfy the required Zero CLI workflow";
   }
   return "unknown failure";
 }
 
-function getAgentRequirementFailures(metrics: AgentMetrics | null): string[] {
+function getAgentRequirementFailures(
+  metrics: AgentMetrics | null,
+  maxTurns: number,
+): string[] {
   if (!metrics) return ["missing agent metrics"];
   const failures = [];
+  if (metrics.turnCount > maxTurns) {
+    failures.push(
+      `agent used ${metrics.turnCount} turns, exceeding max ${maxTurns}`,
+    );
+  }
   if (metrics.zeroCliCallCount === 0) failures.push("zero CLI was not called");
   if (metrics.zeroSkillLoadCount === 0) {
     failures.push("zero skill was not loaded");
@@ -1017,6 +1075,14 @@ function timestamp(): string {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
+function modelPathSegment(model: string) {
+  const segment = model
+    .replace(/\//g, "__")
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return segment || "model";
+}
+
 function printJsonOrText(json: boolean, value: unknown) {
   if (json) {
     console.log(JSON.stringify(value, null, 2));
@@ -1028,8 +1094,9 @@ function printJsonOrText(json: boolean, value: unknown) {
       const steps = result.agent
         ? `, ${result.agent.turnCount} turns, ${result.agent.toolCallCount} tools`
         : "";
+      const status = result.passed ? "PASS" : "FAIL";
       console.log(
-        `${result.passed ? "PASS" : "FAIL"} ${result.id} ${result.mode} (${result.durationMs} ms${steps})`,
+        `${status} ${result.model} ${result.id} ${result.mode} (${result.durationMs} ms${steps})`,
       );
       if (!result.passed && result.error) console.log(`  ${result.error}`);
       if (result.agentRequirementFailures.length > 0) {
@@ -1057,6 +1124,7 @@ function isSummary(value: unknown): value is {
   sandboxKeptAlive: boolean;
   results: Array<{
     id: string;
+    model: string;
     mode: string;
     passed: boolean;
     durationMs: number;
@@ -1079,8 +1147,9 @@ function printHelp() {
 
 Options:
   --case <id>              Run one case, e.g. hello-world
-  --model <id>             AI Gateway model id (default: ZERO_EVAL_MODEL or anthropic/claude-sonnet-4.6)
-  --max-turns <n>          Prompted maximum Claude turns (default: 10)
+  --model <id>             AI Gateway model id. May be repeated; overrides defaults
+  --models <ids>           Comma-separated AI Gateway model ids; overrides defaults
+  --max-turns <n>          Maximum Claude turns before failing scoring (default: 10)
   --out <dir>              Output directory (default: .zero/evals/runs/<timestamp>)
   --sandbox-runtime <id>   Vercel Sandbox runtime (default: ZERO_EVAL_SANDBOX_RUNTIME or node24)
   --sandbox-timeout-ms <n> Sandbox timeout (default: ZERO_EVAL_SANDBOX_TIMEOUT_MS or 1800000)
@@ -1093,7 +1162,14 @@ Options:
 
 Live eval credentials:
   Vercel Sandbox: VERCEL_OIDC_TOKEN, or VERCEL_TOKEN + VERCEL_TEAM_ID + VERCEL_PROJECT_ID
-  AI Gateway: AI_GATEWAY_API_KEY, ANTHROPIC_AUTH_TOKEN, or VERCEL_OIDC_TOKEN
+  AI Gateway: AI_GATEWAY_API_KEY or VERCEL_OIDC_TOKEN
+
+Default models:
+  ${DEFAULT_MODELS.join("\n  ")}
+
+Model environment:
+  ZERO_EVAL_MODELS=<comma-separated ids>
+  ZERO_EVAL_MODEL=<single id, kept for compatibility>
 `);
 }
 
