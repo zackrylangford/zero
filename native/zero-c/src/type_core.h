@@ -39,6 +39,7 @@ typedef enum {
 typedef struct {
   ZStaticValueKind kind;
   char *text;
+  char *static_type;
   ZTypeBinderId binder;
   unsigned long long number;
   bool boolean;

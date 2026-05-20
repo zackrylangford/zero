@@ -188,11 +188,47 @@ static bool static_binder_alias_resolves_to(const ZUnifyTrace *trace, const ZSta
   return static_binder_alias_resolves_to(trace, &binding->static_value, target, next_path, next_len);
 }
 
+static const char *static_type_or_default(const char *type) {
+  return type && type[0] ? type : "usize";
+}
+
+static const char *static_value_binder_type(const ZStaticValue *value) {
+  return static_type_or_default(value ? value->static_type : NULL);
+}
+
+static bool static_type_is_integer(const char *type) {
+  type = static_type_or_default(type);
+  return strcmp(type, "usize") == 0 || strcmp(type, "isize") == 0 ||
+         strcmp(type, "u8") == 0 || strcmp(type, "u16") == 0 || strcmp(type, "u32") == 0 || strcmp(type, "u64") == 0 ||
+         strcmp(type, "i8") == 0 || strcmp(type, "i16") == 0 || strcmp(type, "i32") == 0 || strcmp(type, "i64") == 0;
+}
+
+static bool static_type_compatible(const char *left, const char *right) {
+  return strcmp(static_type_or_default(left), static_type_or_default(right)) == 0;
+}
+
+static bool static_symbol_matches_type(const ZStaticValue *value, const char *type) {
+  if (!value || value->kind != Z_STATIC_VALUE_SYMBOL || !value->text) return false;
+  type = static_type_or_default(type);
+  size_t type_len = strlen(type);
+  return strncmp(value->text, type, type_len) == 0 && value->text[type_len] == '.' && value->text[type_len + 1] != 0;
+}
+
+static bool static_value_matches_type(const ZStaticValue *value, const char *type) {
+  if (!value) return false;
+  type = static_type_or_default(type);
+  if (value->kind == Z_STATIC_VALUE_BINDER) return static_type_compatible(type, static_value_binder_type(value));
+  if (static_type_is_integer(type)) return value->kind == Z_STATIC_VALUE_NUMBER;
+  if (strcmp(type, "Bool") == 0) return value->kind == Z_STATIC_VALUE_BOOL;
+  return static_symbol_matches_type(value, type);
+}
+
 static bool static_value_unify(const ZStaticValue *pattern, const ZStaticValue *actual, ZUnifyTrace *trace);
 
-static bool bind_static(ZUnifyTrace *trace, const char *name, ZTypeBinderId binder, const ZStaticValue *value) {
+static bool bind_static(ZUnifyTrace *trace, const char *name, ZTypeBinderId binder, const char *static_type, const ZStaticValue *value) {
   if (binder == Z_TYPE_BINDER_ID_INVALID || !value) return unify_fail(trace, "invalid static binding");
   if (value->kind == Z_STATIC_VALUE_BINDER && value->binder == binder) return true;
+  if (!static_value_matches_type(value, static_type)) return unify_fail(trace, "static value does not match binder type");
   ZUnifyBinding *existing = unify_trace_lookup_mut(trace, binder, Z_UNIFY_BINDING_STATIC);
   if (existing) return static_value_unify(&existing->static_value, value, trace);
   if (static_binder_alias_resolves_to(trace, value, binder, NULL, 0)) return true;
@@ -207,8 +243,8 @@ static bool bind_static(ZUnifyTrace *trace, const char *name, ZTypeBinderId bind
 
 static bool static_value_unify(const ZStaticValue *pattern, const ZStaticValue *actual, ZUnifyTrace *trace) {
   if (!pattern || !actual) return unify_fail(trace, "missing static value");
-  if (pattern->kind == Z_STATIC_VALUE_BINDER) return bind_static(trace, pattern->text, pattern->binder, actual);
-  if (actual->kind == Z_STATIC_VALUE_BINDER) return bind_static(trace, actual->text, actual->binder, pattern);
+  if (pattern->kind == Z_STATIC_VALUE_BINDER) return bind_static(trace, pattern->text, pattern->binder, pattern->static_type, actual);
+  if (actual->kind == Z_STATIC_VALUE_BINDER) return bind_static(trace, actual->text, actual->binder, actual->static_type, pattern);
   if (z_static_value_equal(pattern, actual)) return true;
   return unify_fail(trace, "static values do not unify");
 }
@@ -350,15 +386,11 @@ static bool type_unify_inner(ZTypeArena *arena, ZTypeId pattern, ZTypeId actual,
 
 bool z_type_unify(ZTypeArena *arena, ZTypeId pattern, ZTypeId actual, ZUnifyTrace *trace) {
   size_t start_len = trace ? trace->len : 0;
-  char prior_message[sizeof(trace->message)];
-  if (trace) {
-    memcpy(prior_message, trace->message, sizeof(prior_message));
-    trace->message[0] = 0;
-  }
+  if (trace) trace->message[0] = 0;
 
   bool ok = type_unify_inner(arena, pattern, actual, trace);
   if (ok) {
-    if (trace) memcpy(trace->message, prior_message, sizeof(prior_message));
+    if (trace) trace->message[0] = 0;
     return true;
   }
 

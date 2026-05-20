@@ -343,6 +343,33 @@ static void expect_concrete_first_static_substitution(void) {
   z_type_arena_free(&arena);
 }
 
+static void expect_static_binder_types_are_checked(void) {
+  ZTypeArena arena;
+  z_type_arena_init(&arena);
+  ZTypeBinderDecl decls[] = {
+    {.name = "N", .kind = Z_TYPE_BINDER_STATIC, .id = 64, .static_type = "usize"},
+    {.name = "Flag", .kind = Z_TYPE_BINDER_STATIC, .id = 65, .static_type = "Bool"},
+    {.name = "ModeValue", .kind = Z_TYPE_BINDER_STATIC, .id = 66, .static_type = "Mode"},
+  };
+  ZTypeBinderScope scope = {.items = decls, .len = 3};
+  ZTypeId integer_pattern = parse_with_binders_or_die(&arena, "FixedVec<u8,N>", &scope);
+  ZTypeId bool_actual = parse_or_die(&arena, "FixedVec<u8,true>");
+  ZUnifyTrace trace;
+  z_unify_trace_init(&trace);
+  expect(!z_type_unify(&arena, integer_pattern, bool_actual, &trace), "static integer binder accepted a Bool value");
+  expect(strstr(trace.message, "static value") != NULL, "static type failure did not leave a trace message");
+
+  ZTypeId alias_pattern = parse_with_binders_or_die(&arena, "Pair<N,N>", &scope);
+  ZTypeId alias_actual = parse_with_binders_or_die(&arena, "Pair<Flag,N>", &scope);
+  expect(!z_type_unify(&arena, alias_pattern, alias_actual, &trace), "static binders with different declared types unified");
+
+  ZTypeId enum_pattern = parse_with_binders_or_die(&arena, "Gate<ModeValue>", &scope);
+  ZTypeId enum_actual = parse_or_die(&arena, "Gate<Mode.tiny>");
+  expect(z_type_unify(&arena, enum_pattern, enum_actual, &trace), "enum-like static binder rejected matching symbol value");
+  z_unify_trace_free(&trace);
+  z_type_arena_free(&arena);
+}
+
 static void expect_failed_unify_rolls_back_trace(void) {
   ZTypeArena arena;
   z_type_arena_init(&arena);
@@ -367,6 +394,7 @@ static void expect_failed_unify_rolls_back_trace(void) {
 
   ZTypeId good = parse_or_die(&arena, "Pair<u8,u8>");
   expect(z_type_unify(&arena, pattern, good, &trace), "trace was poisoned after failed unification rollback");
+  expect(trace.message[0] == 0, "successful retry left a stale unification failure message");
   expect(trace.len == 2, "successful retry did not commit expected binding count");
   const ZUnifyBinding *type_binding = z_unify_trace_lookup(&trace, 70, Z_UNIFY_BINDING_TYPE);
   expect(type_binding != NULL, "successful retry did not bind T");
@@ -416,6 +444,7 @@ int main(void) {
   expect_chained_static_substitution();
   expect_concrete_first_type_substitution();
   expect_concrete_first_static_substitution();
+  expect_static_binder_types_are_checked();
   expect_failed_unify_rolls_back_trace();
 
   expect_invalid_type("");

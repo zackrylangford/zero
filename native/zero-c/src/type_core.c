@@ -99,7 +99,11 @@ static const ZTypeBinderDecl *type_binder_lookup(const ZTypeBinderScope *scope, 
 
 static bool static_value_from_binder(const ZTypeBinderDecl *decl, ZStaticValue *out) {
   if (!decl || decl->kind != Z_TYPE_BINDER_STATIC || decl->id == Z_TYPE_BINDER_ID_INVALID || !out) return false;
-  *out = (ZStaticValue){.kind = Z_STATIC_VALUE_BINDER, .text = type_strdup(decl->name ? decl->name : ""), .binder = decl->id};
+  *out = (ZStaticValue){
+      .kind = Z_STATIC_VALUE_BINDER,
+      .text = type_strdup(decl->name ? decl->name : ""),
+      .static_type = type_strdup(decl->static_type && decl->static_type[0] ? decl->static_type : "usize"),
+      .binder = decl->id};
   return true;
 }
 
@@ -107,12 +111,14 @@ bool z_static_value_clone(const ZStaticValue *source, ZStaticValue *out) {
   if (!source || !out) return false;
   *out = *source;
   out->text = type_strdup(source->text ? source->text : "");
+  out->static_type = source->static_type ? type_strdup(source->static_type) : NULL;
   return true;
 }
 
 void z_static_value_free(ZStaticValue *value) {
   if (!value) return;
   free(value->text);
+  free(value->static_type);
   *value = (ZStaticValue){0};
 }
 
