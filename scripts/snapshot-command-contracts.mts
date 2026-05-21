@@ -369,6 +369,38 @@ assert(rowGraph.sourceFiles.includes(rowCommandFixture));
 assert(rowGraph.symbols.some((symbol) => symbol.name === "inc" && symbol.kind === "function"));
 assert(rowGraph.functions.some((fun) => fun.name === "main"));
 
+const rowTestFixture = join(outDir, "row_test_command.row");
+writeFileSync(
+  rowTestFixture,
+  "fn add i32 left i32 right i32\n" +
+    "  ret + left right\n" +
+    "\n" +
+    "test \"row addition\"\n" +
+    "  expect == (add 20 22) 42\n" +
+    "\n" +
+    "test \"xfail: row pending\"\n" +
+    "  expect false\n" +
+    "\n" +
+    "pub fn main Void\n",
+);
+const rowTestJson = json(["test", "--json", rowTestFixture]).body;
+assert.equal(rowTestJson.ok, true);
+assert.equal(rowTestJson.testBackend, "direct-frontend");
+assert.equal(rowTestJson.discoveredTests, 2);
+assert.equal(rowTestJson.expectedFailures, 1);
+assert(rowTestJson.results.some((result) => result.name === "row addition" && result.status === "passed"));
+assert(rowTestJson.results.some((result) => result.name === "xfail: row pending" && result.status === "expected-fail"));
+const rowTestSizePath = join(outDir, "row-test-sized");
+rmSync(rowTestSizePath, { force: true });
+const rowTestSize = json(["size", "--json", "--target", "linux-musl-x64", rowTestFixture, "--out", rowTestSizePath]).body;
+assert.equal(rowTestSize.sourceFile, rowTestFixture);
+assert.equal(rowTestSize.generatedCBytes, 0);
+assert(rowTestSize.retentionReasons.some((item) => item.name === "row addition" && item.reason === "zero test discovery"));
+const rowTestDev = json(["dev", "--json", "--trace", rowTestFixture]).body;
+assert.equal(rowTestDev.trace.requested, true);
+assert(rowTestDev.watch.files.includes(rowTestFixture));
+assert.equal(rowTestDev.affected.tests, 2);
+
 const rowHelperFixture = join(outDir, "row_helper.row");
 writeFileSync(
   rowHelperFixture,
@@ -415,6 +447,8 @@ writeFileSync(
 writeFileSync(
   rowPackageMain,
   "use helper\n" +
+    "test \"package helper\"\n" +
+    "  expect == (double 21) 42\n" +
     "pub fn main Void\n" +
     "  let total i32 double 21\n",
 );
@@ -423,7 +457,7 @@ const rowPackageTokens = json(["tokens", "--json", rowPackage]).body;
 assert.equal(rowPackageTokens.syntax, "row");
 assert.equal(rowPackageTokens.sourceFile, rowPackageMain);
 const rowPackageParse = json(["parse", "--json", rowPackage]).body;
-assert.equal(rowPackageParse.root.functionCount, 2);
+assert.equal(rowPackageParse.root.functionCount, 3);
 assert(rowPackageParse.functions.some((fun) => fun.name === "double"));
 const rowPackageCheck = json(["check", "--json", rowPackage]).body;
 assert.equal(rowPackageCheck.ok, true);
@@ -434,6 +468,12 @@ assert(rowPackageGraph.sourceFiles.includes(rowPackageMain));
 assert(rowPackageGraph.sourceFiles.includes(rowPackageHelper));
 assert(rowPackageGraph.importEdges.some((edge) => edge.from === "main" && edge.to === "helper" && edge.path === rowPackageHelper));
 assert(rowPackageGraph.functions.some((fun) => fun.name === "double"));
+const rowPackageTest = json(["test", "--json", rowPackage]).body;
+assert.equal(rowPackageTest.ok, true);
+assert.equal(rowPackageTest.testDiscovery.mode, "package");
+assert.equal(rowPackageTest.discoveredTests, 1);
+assert(rowPackageTest.fixtures.sourceFiles.includes(rowPackageHelper));
+assert.equal(rowPackageTest.results[0].status, "passed");
 
 const rowMissingMainPackage = join(outDir, "row-missing-main-package");
 mkdirSync(join(rowMissingMainPackage, "src"), { recursive: true });
@@ -498,6 +538,20 @@ const rowMalformedImportCheck = json(["check", "--json", rowMalformedImportFixtu
 assert.notEqual(rowMalformedImportCheck.code, 0);
 assert.equal(rowMalformedImportCheck.body.diagnostics[0].code, "PAR100");
 assert.match(rowMalformedImportCheck.body.diagnostics[0].message, /expected '\.' between import module segments/);
+
+const rowTypeMismatchFixture = join(outDir, "row_type_mismatch.row");
+writeFileSync(
+  rowTypeMismatchFixture,
+  "pub fn main Void\n" +
+    "  let value i32 \"nope\"\n",
+);
+const rowFixPlan = json(["fix", "--plan", "--json", rowTypeMismatchFixture]).body;
+assert.equal(rowFixPlan.ok, false);
+assert.equal(rowFixPlan.mode, "plan");
+assert.equal(rowFixPlan.diagnostics[0].code, "TYP002");
+assert.equal(rowFixPlan.diagnostics[0].path, rowTypeMismatchFixture);
+assert.equal(rowFixPlan.diagnostics[0].line, 2);
+assert.equal(rowFixPlan.fixes[0].diagnosticCode, "TYP002");
 
 const rowCycleAFixture = join(outDir, "row_cycle_a.row");
 const rowCycleBFixture = join(outDir, "row_cycle_b.row");
