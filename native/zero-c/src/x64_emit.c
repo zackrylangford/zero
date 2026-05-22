@@ -277,6 +277,10 @@ void z_x64_emit_and_reg_i8(ZBuf *buf, unsigned reg, int8_t value, bool wide) {
   z_x64_emit_reg_i8_op(buf, 4, reg, value, wide);
 }
 
+void z_x64_emit_cmp_reg_i8(ZBuf *buf, unsigned reg, int8_t value, bool wide) {
+  z_x64_emit_reg_i8_op(buf, 7, reg, value, wide);
+}
+
 void z_x64_emit_and_reg_u32(ZBuf *buf, unsigned reg, uint32_t value, bool wide) {
   z_x64_require_reg(reg);
   unsigned rex = wide ? 0x48 : 0x40;
@@ -660,25 +664,24 @@ void z_x64_emit_div_rax_rcx(ZBuf *buf, bool wide, bool uns, bool keep_remainder)
   }
 }
 
+void z_x64_emit_test_reg_reg(ZBuf *buf, unsigned reg, bool wide) {
+  z_x64_emit_reg_reg_op(buf, 0x85, reg, reg, wide);
+}
+
 void z_x64_emit_test_rax_rax(ZBuf *buf, bool wide) {
-  z_x64_emit_wide_prefix(buf, wide);
-  z_x64_append_u8(buf, 0x85);
-  z_x64_append_u8(buf, 0xc0);
+  z_x64_emit_test_reg_reg(buf, 0, wide);
 }
 
 void z_x64_emit_test_ecx_ecx(ZBuf *buf) {
-  z_x64_append_u8(buf, 0x85);
-  z_x64_append_u8(buf, 0xc9);
+  z_x64_emit_test_reg_reg(buf, 1, false);
 }
 
 void z_x64_emit_cmp_rax_rcx(ZBuf *buf, bool wide) {
-  z_x64_emit_wide_prefix(buf, wide);
-  z_x64_append_u8(buf, 0x39);
-  z_x64_append_u8(buf, 0xc8);
+  z_x64_emit_cmp_reg_reg(buf, 0, 1, wide);
 }
 
-void z_x64_emit_cmp_rax_rcx_to_bool(ZBuf *buf, unsigned setcc_opcode, bool wide) {
-  z_x64_emit_cmp_rax_rcx(buf, wide);
+void z_x64_emit_setcc_al_to_bool(ZBuf *buf, unsigned setcc_opcode) {
+  if (setcc_opcode < 0x90 || setcc_opcode > 0x9f) abort();
   z_x64_append_u8(buf, 0x0f);
   z_x64_append_u8(buf, setcc_opcode);
   z_x64_append_u8(buf, 0xc0);
@@ -687,14 +690,14 @@ void z_x64_emit_cmp_rax_rcx_to_bool(ZBuf *buf, unsigned setcc_opcode, bool wide)
   z_x64_append_u8(buf, 0xc0);
 }
 
+void z_x64_emit_cmp_rax_rcx_to_bool(ZBuf *buf, unsigned setcc_opcode, bool wide) {
+  z_x64_emit_cmp_rax_rcx(buf, wide);
+  z_x64_emit_setcc_al_to_bool(buf, setcc_opcode);
+}
+
 void z_x64_emit_bool_from_nonnegative_rax(ZBuf *buf) {
   z_x64_emit_test_rax_rax(buf, true);
-  z_x64_append_u8(buf, 0x0f);
-  z_x64_append_u8(buf, 0x99);
-  z_x64_append_u8(buf, 0xc0);
-  z_x64_append_u8(buf, 0x0f);
-  z_x64_append_u8(buf, 0xb6);
-  z_x64_append_u8(buf, 0xc0);
+  z_x64_emit_setcc_al_to_bool(buf, 0x99);
 }
 
 void z_x64_emit_prologue(ZBuf *buf, unsigned stack_size) {

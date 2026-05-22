@@ -553,16 +553,8 @@ static bool elf_emit_value(ZBuf *code, const IrFunction *fun, const IrValue *val
       return elf_emit_json_parse_bytes_call(code, fun, value, ctx, diag);
     case IR_VALUE_JSON_VALIDATE_BYTES:
       if (!elf_emit_json_parse_bytes_call(code, fun, value, ctx, diag)) return false;
-      z_x64_append_u8(code, 0x48);
-      z_x64_append_u8(code, 0x83);
-      z_x64_append_u8(code, 0xf8);
-      z_x64_append_u8(code, 0x00);
-      z_x64_append_u8(code, 0x0f);
-      z_x64_append_u8(code, 0x9d);
-      z_x64_append_u8(code, 0xc0);
-      z_x64_append_u8(code, 0x0f);
-      z_x64_append_u8(code, 0xb6);
-      z_x64_append_u8(code, 0xc0);
+      z_x64_emit_cmp_reg_i8(code, 0, 0, true);
+      z_x64_emit_setcc_al_to_bool(code, 0x9d);
       return true;
     case IR_VALUE_JSON_STREAM_TOKENS_BYTES: {
       if (!elf_emit_json_parse_bytes_call(code, fun, value, ctx, diag)) return false;
@@ -768,9 +760,7 @@ static bool elf_emit_value(ZBuf *code, const IrFunction *fun, const IrValue *val
       z_x64_append_u8(code, 0x04);
       z_x64_append_u8(code, 0x04);
       size_t scan_loop = code->len;
-      z_x64_append_u8(code, 0x4d);
-      z_x64_append_u8(code, 0x39);
-      z_x64_append_u8(code, 0xc1);
+      z_x64_emit_cmp_reg_reg(code, 9, 8, true);
       size_t scan_done = z_x64_emit_jcc32_placeholder(code, 0x83);
       z_x64_emit_inc_rsp_offset64(code, 1032);
       z_x64_append_u8(code, 0x41);
@@ -900,12 +890,7 @@ static bool elf_emit_value(ZBuf *code, const IrFunction *fun, const IrValue *val
       z_x64_emit_syscall(code);
       z_x64_emit_pop_reg64(code, 1);
       z_x64_emit_cmp_rax_rcx(code, false);
-      z_x64_append_u8(code, 0x0f);
-      z_x64_append_u8(code, 0x94);
-      z_x64_append_u8(code, 0xc0);
-      z_x64_append_u8(code, 0x0f);
-      z_x64_append_u8(code, 0xb6);
-      z_x64_append_u8(code, 0xc0);
+      z_x64_emit_setcc_al_to_bool(code, 0x94);
       if (value->type == IR_TYPE_I64) {
         z_x64_emit_test_rax_rax(code, false);
         size_t success = z_x64_emit_jcc32_placeholder(code, 0x85);
@@ -1128,8 +1113,7 @@ static bool elf_emit_value(ZBuf *code, const IrFunction *fun, const IrValue *val
       z_x64_emit_push_rax(code);
       if (!elf_emit_byte_view_len(code, fun, value->right, ctx, diag)) return false;
       z_x64_emit_pop_reg64(code, 1);
-      z_x64_append_u8(code, 0x39);
-      z_x64_append_u8(code, 0xc1);
+      z_x64_emit_cmp_reg_reg(code, 1, 0, false);
       size_t same_len = z_x64_emit_jcc32_placeholder(code, 0x84);
       z_x64_emit_mov_eax_u32(code, 0);
       size_t end = z_x64_emit_jmp32_placeholder(code, 0xe9);
@@ -1298,9 +1282,7 @@ static bool elf_emit_env_get_to_local(ZBuf *text, const IrFunction *fun, const I
   z_x64_append_u8(text, 0x49);
   z_x64_append_u8(text, 0x8b);
   z_x64_append_u8(text, 0x18);
-  z_x64_append_u8(text, 0x48);
-  z_x64_append_u8(text, 0x85);
-  z_x64_append_u8(text, 0xdb);
+  z_x64_emit_test_reg_reg(text, 3, true);
   size_t none = z_x64_emit_jcc32_placeholder(text, 0x84);
   z_x64_emit_xor_ecx_ecx(text);
 
@@ -1373,9 +1355,7 @@ static bool elf_emit_read_all_or_raise_to_local(ZBuf *text, const IrFunction *fu
     z_x64_emit_push_rax(text);
     if (!elf_emit_value(text, fun, value->right, ctx, diag)) return false;
     z_x64_emit_pop_reg64(text, 1);
-    z_x64_append_u8(text, 0x48);
-    z_x64_append_u8(text, 0x39);
-    z_x64_append_u8(text, 0xc1);
+    z_x64_emit_cmp_reg_reg(text, 1, 0, true);
     size_t size_ok = z_x64_emit_jcc32_placeholder(text, 0x83);
     z_x64_emit_pop_rax(text);
     elf_emit_close_rax_fd(text);
@@ -1397,8 +1377,7 @@ static bool elf_emit_read_all_or_raise_to_local(ZBuf *text, const IrFunction *fu
   z_x64_emit_sub_reg_reg(text, 2, 1, false);
   if (value->right) {
     if (!elf_emit_value(text, fun, value->right, ctx, diag)) return false;
-    z_x64_append_u8(text, 0x39);
-    z_x64_append_u8(text, 0xc2);
+    z_x64_emit_cmp_reg_reg(text, 2, 0, false);
     size_t keep_capacity = z_x64_emit_jcc32_placeholder(text, 0x86);
     z_x64_emit_mov_reg_from_reg(text, 2, 0, false);
     z_x64_patch_rel32(text, keep_capacity, text->len);

@@ -778,9 +778,7 @@ static size_t coff_emit_exe_world_write(ZBuf *text, ZCoffImportPatch *import_pat
   z_x64_emit_store_rsp_offset_reg(text, 2, 40, true);
   z_x64_emit_store_rsp_offset_reg(text, 8, 48, true);
   z_x64_emit_mov_rsp_offset_u32(text, 56, 0, false); // DWORD bytes_written = 0
-  z_x64_append_u8(text, 0x83);
-  z_x64_append_u8(text, 0xf9);
-  z_x64_append_u8(text, 0x02); // cmp ecx, 2
+  z_x64_emit_cmp_reg_i8(text, 1, 2, false); // cmp ecx, 2
   z_x64_emit_mov_reg_u32(text, 1, 0xfffffff5u); // STD_OUTPUT_HANDLE
   z_x64_append_u8(text, 0x75);
   z_x64_append_u8(text, 0x05); // jne after stderr handle
