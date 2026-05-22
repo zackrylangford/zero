@@ -83,7 +83,7 @@ Use `check maybeValue` only when absence should propagate as a failure in a fall
 Hosted file APIs can use explicit handles:
 
 ```zero
-let fs = std.fs.host()
+let fs std.fs.host()
 mut file owned<File> check std.fs.createOrRaise fs ".zero/out/log.txt"
 check std.fs.writeAllOrRaise (&mut file) (std.mem.span "hello\n")
 ```
