@@ -15,10 +15,10 @@ type CScanState = {
 };
 
 const fileBudgets = {
-  "native/zero-c/include/zero.h": { maxLines: 915, maxStrcmpCalls: 0 },
+  "native/zero-c/include/zero.h": { maxLines: 966, maxStrcmpCalls: 0 },
   "native/zero-c/include/zero_runtime.h": { maxLines: 100, maxStrcmpCalls: 0 },
   "native/zero-c/src/checker.c": { maxLines: 9395, maxStrcmpCalls: 403 },
-  "native/zero-c/src/main.c": { maxLines: 9938, maxStrcmpCalls: 451 },
+  "native/zero-c/src/main.c": { maxLines: 9872, maxStrcmpCalls: 441 },
   "native/zero-c/src/ir.c": { maxLines: 3700, maxStrcmpCalls: 224 },
   "native/zero-c/src/row_syntax.c": { maxLines: 2150, maxStrcmpCalls: 11 },
   "native/zero-c/src/ast.c": { maxLines: 250, maxStrcmpCalls: 0 },
@@ -33,6 +33,7 @@ const fileBudgets = {
   "native/zero-c/src/coff_format.h": { maxLines: 100, maxStrcmpCalls: 0 },
   "native/zero-c/src/coff_emit_state.c": { maxLines: 150, maxStrcmpCalls: 0 },
   "native/zero-c/src/coff_emit_state.h": { maxLines: 70, maxStrcmpCalls: 0 },
+  "native/zero-c/src/direct_emit.c": { maxLines: 35, maxStrcmpCalls: 0 },
   "native/zero-c/src/direct_metrics.c": { maxLines: 20, maxStrcmpCalls: 0 },
   "native/zero-c/src/elf_format.c": { maxLines: 220, maxStrcmpCalls: 0 },
   "native/zero-c/src/elf_format.h": { maxLines: 60, maxStrcmpCalls: 0 },
@@ -55,7 +56,7 @@ const fileBudgets = {
   "native/zero-c/src/specialize.h": { maxLines: 50, maxStrcmpCalls: 0 },
   "native/zero-c/src/std_sig.c": { maxLines: 180, maxStrcmpCalls: 2 },
   "native/zero-c/src/std_sig.h": { maxLines: 40, maxStrcmpCalls: 0 },
-  "native/zero-c/src/target_backend.c": { maxLines: 241, maxStrcmpCalls: 24 },
+  "native/zero-c/src/target_backend.c": { maxLines: 348, maxStrcmpCalls: 32 },
   "native/zero-c/src/target.c": { maxLines: 465, maxStrcmpCalls: 15 },
   "native/zero-c/src/type_core.c": { maxLines: 900, maxStrcmpCalls: 8 },
   "native/zero-c/src/type_core.h": { maxLines: 150, maxStrcmpCalls: 0 },
@@ -610,7 +611,15 @@ function budgetViolations(files, allLargeFunctions, stdlib, backendFormats) {
       backendFormats.directTarget.mainManualDirectToolchainJson > 0 ||
       backendFormats.directTarget.mainDirectMetricMachoChecks > 0 ||
       backendFormats.directTarget.mainDirectBackendNameHelpers > 0 ||
-      backendFormats.directTarget.mainDirectEmitSelectionHelpers > 0) {
+      backendFormats.directTarget.mainDirectEmitSelectionHelpers > 0 ||
+      backendFormats.directTarget.mainDirectReleaseTargetHelpers > 0 ||
+      backendFormats.directTarget.mainDirectRuntimeLinkBlockers > 0 ||
+      backendFormats.directTarget.mainDirectObjectSelectionHelpers > 0 ||
+      backendFormats.directTarget.mainDirectBuildToolchainSelectionHelpers > 0 ||
+      backendFormats.directTarget.mainDirectExecutableSelectionHelpers > 0 ||
+      backendFormats.directTarget.mainDirectEmitDispatchHelpers > 0 ||
+      backendFormats.directTarget.mainDirectBuildArtifactSelectionHelpers > 0 ||
+      backendFormats.directTarget.mainDirectReadinessSelectionHelpers > 0) {
     violations.push({
       kind: "direct-target-backend-matrix",
       directTarget: backendFormats.directTarget,
@@ -914,6 +923,14 @@ const backendFormats = {
     mainDirectMetricMachoChecks: countMatches(cCodeText(main), /z_(?:direct_object_backend|direct_exe_backend)\s*\([^)]*\)\s*==\s*Z_DIRECT_BACKEND_MACHO64/g),
     mainDirectBackendNameHelpers: countMatches(cCodeText(main), /static const char \*(?:backend_blocker_backend_name|target_readiness_backend)\s*\(/g),
     mainDirectEmitSelectionHelpers: countMatches(cCodeText(main), /static (?:ZDirectBackend|const char \*)direct_emit_(?:backend|emitter)\s*\(/g),
+    mainDirectReleaseTargetHelpers: countMatches(cCodeText(main), /static const char \*release_artifact_kind_for_emit\s*\(|selected_backend\s*==\s*Z_DIRECT_BACKEND_NONE\s*&&\s*selected_executable/g),
+    mainDirectRuntimeLinkBlockers: countMatches(cCodeText(main), /runtime helpers currently require the Mach-O or ELF64 object link plan|HTTP runtime provider is host-only for direct executable links/g),
+    mainDirectObjectSelectionHelpers: countMatches(cCodeText(main), /metadata_only_direct|runtime_linked_exe|direct_executable_artifact/g),
+    mainDirectBuildToolchainSelectionHelpers: countMatches(cCodeText(main), /ZDirectBackend\s+direct_backend\s*=\s*z_direct_backend_for_emit_kind/g),
+    mainDirectExecutableSelectionHelpers: countMatches(cCodeText(main), /z_direct_exe_backend\s*\(\s*target\s*\)|z_direct_backend_is_request_name\s*\(\s*command\.backend\s*\)|z_direct_requested_backend_matches\s*\(\s*command\.backend/g),
+    mainDirectEmitDispatchHelpers: countMatches(cCodeText(main), /switch\s*\(\s*(?:object_backend|exe_backend)\s*\)|object_backend\s*==\s*Z_DIRECT_BACKEND_MACHO64/g),
+    mainDirectBuildArtifactSelectionHelpers: countMatches(cCodeText(main), /z_direct_object_backend\s*\(\s*target\s*\)|z_direct_backend_artifact_path\s*\([^)]*\)|z_direct_backend_runtime_object_cache_key\s*\([^)]*\)/g),
+    mainDirectReadinessSelectionHelpers: countMatches(cCodeText(main), /const char \*emitter\s*=\s*z_direct_object_emitter\s*\(\s*target\s*\)|z_direct_runtime_link_blocker\s*\(\s*target/g),
   },
   elf: {
     sharedWriter: /\bz_elf_write_object64\s*\(/.test(elfFormatSource) && /\bz_elf_write_executable64\s*\(/.test(elfFormatSource),

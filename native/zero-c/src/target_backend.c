@@ -124,6 +124,13 @@ ZToolchainPlan z_direct_backend_toolchain_plan(ZDirectBackend backend, const ZTa
   return plan;
 }
 
+bool z_direct_backend_toolchain_plan_for_emit_kind(const ZTargetInfo *target, const char *emit_kind, const char *requested_backend, ZToolchainPlan *out) {
+  ZDirectBackend backend = z_direct_backend_for_emit_kind(target, emit_kind, requested_backend);
+  if (backend == Z_DIRECT_BACKEND_NONE) return false;
+  if (out) *out = z_direct_backend_toolchain_plan(backend, target);
+  return true;
+}
+
 const char *z_direct_backend_runtime_object_cache_key(ZDirectBackend backend) {
   const ZDirectBackendDescriptor *descriptor = direct_backend_descriptor(backend);
   return descriptor ? descriptor->runtime_object_cache_key : "unsupported";
@@ -143,6 +150,13 @@ size_t z_direct_backend_symbol_overhead(ZDirectBackend backend, bool has_readonl
 bool z_direct_backend_supports_runtime_object(ZDirectBackend backend) {
   const ZDirectBackendDescriptor *descriptor = direct_backend_descriptor(backend);
   return descriptor ? descriptor->runtime_object_supported : false;
+}
+
+const char *z_direct_runtime_link_blocker(const ZTargetInfo *target, bool needs_http_runtime) {
+  ZDirectBackend object_backend = z_direct_object_backend(target);
+  if (!z_direct_backend_supports_runtime_object(object_backend)) return "runtime helpers currently require the Mach-O or ELF64 object link plan";
+  if (needs_http_runtime && !z_target_is_host(target)) return "HTTP runtime provider is host-only for direct executable links";
+  return NULL;
 }
 
 bool z_direct_backend_emitter_is_executable(const char *emitter) {
@@ -215,6 +229,99 @@ const char *z_direct_backend_name_for_emit_kind(const ZTargetInfo *target, const
     return z_direct_exe_emitter(target);
   }
   return "none";
+}
+
+static const char *direct_artifact_kind_for_emit_kind(const char *emit_kind) {
+  if (emit_kind && strcmp(emit_kind, "obj") == 0) return "native-object";
+  if (emit_kind && strcmp(emit_kind, "exe") == 0) return "native-executable";
+  return "artifact";
+}
+
+ZDirectReleaseTargetFacts z_direct_release_target_facts(const ZTargetInfo *target, const char *emit_kind, const char *requested_backend, const ZToolchainPlan *fallback_plan) {
+  bool selected_executable = emit_kind && strcmp(emit_kind, "exe") == 0;
+  ZDirectBackend selected_backend = z_direct_backend_for_emit_kind(target, emit_kind, requested_backend);
+  if (selected_backend == Z_DIRECT_BACKEND_NONE && selected_executable) selected_backend = z_direct_exe_backend(target);
+  bool direct_selected = selected_backend != Z_DIRECT_BACKEND_NONE;
+  bool target_requires_sysroot = z_target_requires_sysroot(target);
+  bool artifact_requires_sysroot = !direct_selected && fallback_plan && fallback_plan->requires_sysroot;
+  const char *fallback_linker = fallback_plan ? fallback_plan->linker_flavor : "none";
+  const char *fallback_libc = fallback_plan ? fallback_plan->libc_mode : "";
+  const char *fallback_sysroot_status = fallback_plan ? fallback_plan->sysroot_status : "not-required";
+  ZDirectReleaseTargetFacts facts = {
+    .selected_emitter = selected_backend == Z_DIRECT_BACKEND_NONE ? "none" : (selected_executable ? z_direct_backend_exe_emitter(selected_backend) : z_direct_backend_object_emitter(selected_backend)),
+    .artifact_kind = direct_artifact_kind_for_emit_kind(emit_kind),
+    .linker_flavor = direct_selected ? z_direct_backend_linker_flavor(selected_backend) : fallback_linker,
+    .artifact_libc_mode = direct_selected ? "none" : fallback_libc,
+    .sysroot_status = artifact_requires_sysroot ? fallback_sysroot_status : (target_requires_sysroot ? "not-used-by-direct-artifact" : "not-required"),
+    .direct_selected = direct_selected,
+    .target_requires_sysroot = target_requires_sysroot,
+    .artifact_requires_sysroot = artifact_requires_sysroot
+  };
+  return facts;
+}
+
+ZDirectObjectBackendFacts z_direct_object_backend_facts(const ZTargetInfo *target, const char *emit_kind, const char *requested_backend, bool has_runtime_imports) {
+  bool emit_obj = emit_kind && strcmp(emit_kind, "obj") == 0;
+  bool emit_exe = emit_kind && strcmp(emit_kind, "exe") == 0;
+  bool metadata_only = emit_kind && (strcmp(emit_kind, "mem") == 0 || strcmp(emit_kind, "size") == 0);
+  bool runtime_linked_exe = emit_exe && has_runtime_imports;
+  bool requested_exe = emit_exe && requested_backend;
+  ZDirectBackend backend = z_direct_backend_for_emit_kind(target, emit_kind, requested_backend);
+  const char *emitter = z_direct_backend_emitter_for_emit_kind(target, emit_kind, requested_backend);
+  if (metadata_only || runtime_linked_exe) {
+    backend = z_direct_object_backend(target);
+    emitter = z_direct_backend_object_emitter(backend);
+    if (metadata_only && (!emitter || strcmp(emitter, "none") == 0)) emitter = "metadata-only";
+  }
+  bool active = metadata_only || runtime_linked_exe || (backend != Z_DIRECT_BACKEND_NONE && (emit_obj || requested_exe));
+  bool executable_artifact = requested_exe && !runtime_linked_exe;
+  ZDirectObjectBackendFacts facts = {
+    .backend = backend,
+    .selected_emitter = emitter,
+    .artifact_path = backend != Z_DIRECT_BACKEND_NONE ? z_direct_backend_artifact_path(backend, executable_artifact) : "unsupported",
+    .linker_flavor = backend != Z_DIRECT_BACKEND_NONE ? z_direct_backend_linker_flavor(backend) : "none",
+    .active = active
+  };
+  return facts;
+}
+
+ZDirectObjectTargetFacts z_direct_object_target_facts(const ZTargetInfo *target) {
+  ZDirectBackend backend = z_direct_object_backend(target);
+  bool available = backend != Z_DIRECT_BACKEND_NONE;
+  ZDirectObjectTargetFacts facts = {
+    .backend = backend,
+    .artifact_path = available ? z_direct_backend_artifact_path(backend, false) : "unsupported",
+    .unsupported_reason = available ? "" : z_direct_backend_reason(target),
+    .available = available
+  };
+  return facts;
+}
+
+ZDirectRuntimeObjectFacts z_direct_runtime_object_facts(const ZTargetInfo *target, bool needs_http_runtime) {
+  ZDirectBackend backend = z_direct_object_backend(target);
+  const char *blocker = z_direct_runtime_link_blocker(target, needs_http_runtime);
+  ZDirectRuntimeObjectFacts facts = {
+    .backend = backend,
+    .cache_key = backend != Z_DIRECT_BACKEND_NONE ? z_direct_backend_runtime_object_cache_key(backend) : "unsupported",
+    .blocker = blocker,
+    .supported = blocker == NULL
+  };
+  return facts;
+}
+
+ZDirectExecutableTargetFacts z_direct_executable_target_facts(const ZTargetInfo *target, const char *requested_backend) {
+  ZDirectBackend backend = z_direct_exe_backend(target);
+  bool requested = requested_backend && requested_backend[0];
+  bool available = backend != Z_DIRECT_BACKEND_NONE;
+  ZDirectExecutableTargetFacts facts = {
+    .backend = backend,
+    .default_request_name = available ? z_direct_backend_object_emitter(backend) : "none",
+    .artifact_path = available ? z_direct_backend_artifact_path(backend, true) : "unsupported",
+    .requested = requested,
+    .requested_name = z_direct_backend_is_request_name(requested_backend),
+    .request_supported = available && z_direct_requested_backend_matches(requested_backend, backend)
+  };
+  return facts;
 }
 
 const char *z_direct_backend_expected(const ZTargetInfo *target) {

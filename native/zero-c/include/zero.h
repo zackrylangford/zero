@@ -813,6 +813,48 @@ typedef struct {
 } ZToolchainPlan;
 
 typedef struct {
+  const char *selected_emitter;
+  const char *artifact_kind;
+  const char *linker_flavor;
+  const char *artifact_libc_mode;
+  const char *sysroot_status;
+  bool direct_selected;
+  bool target_requires_sysroot;
+  bool artifact_requires_sysroot;
+} ZDirectReleaseTargetFacts;
+
+typedef struct {
+  ZDirectBackend backend;
+  const char *selected_emitter;
+  const char *artifact_path;
+  const char *linker_flavor;
+  bool active;
+} ZDirectObjectBackendFacts;
+
+typedef struct {
+  ZDirectBackend backend;
+  const char *artifact_path;
+  const char *unsupported_reason;
+  bool available;
+} ZDirectObjectTargetFacts;
+
+typedef struct {
+  ZDirectBackend backend;
+  const char *cache_key;
+  const char *blocker;
+  bool supported;
+} ZDirectRuntimeObjectFacts;
+
+typedef struct {
+  ZDirectBackend backend;
+  const char *default_request_name;
+  const char *artifact_path;
+  bool requested;
+  bool requested_name;
+  bool request_supported;
+} ZDirectExecutableTargetFacts;
+
+typedef struct {
   size_t hits;
   size_t misses;
   size_t entries;
@@ -841,6 +883,7 @@ void z_free_manifest(ZManifest *manifest);
 char *z_default_out_path(const char *source_file);
 ZToolchainPlan z_plan_toolchain(const char *cc, const char *profile, const ZTargetInfo *target);
 ZToolchainPlan z_direct_backend_toolchain_plan(ZDirectBackend backend, const ZTargetInfo *target);
+bool z_direct_backend_toolchain_plan_for_emit_kind(const ZTargetInfo *target, const char *emit_kind, const char *requested_backend, ZToolchainPlan *out);
 size_t z_direct_target_stack_bytes(const ZTargetInfo *target, const IrProgram *program);
 size_t z_direct_target_max_frame_bytes(const ZTargetInfo *target, const IrProgram *program);
 bool z_toolchain_compile_c_object(const ZToolchainPlan *plan, const char *profile, const ZTargetInfo *target, const char *c_file, const char *object_file, const char *include_dir, const char *extra_c_flags);
@@ -875,6 +918,8 @@ bool z_emit_macho64_object_from_ir(const IrProgram *program, ZBuf *out, ZDiag *d
 bool z_emit_macho64_exe_from_ir(const IrProgram *program, ZBuf *out, ZDiag *diag);
 bool z_emit_coff_x64_object_from_ir(const IrProgram *program, ZBuf *out, ZDiag *diag);
 bool z_emit_coff_x64_exe_from_ir(const IrProgram *program, ZBuf *out, ZDiag *diag);
+bool z_emit_direct_object_from_ir(ZDirectBackend backend, const IrProgram *program, ZBuf *out, ZDiag *diag);
+bool z_emit_direct_executable_from_ir(ZDirectBackend backend, const IrProgram *program, ZBuf *out, ZDiag *diag);
 
 const char *z_host_target(void);
 size_t z_target_count(void);
@@ -896,6 +941,7 @@ const char *z_direct_backend_artifact_path(ZDirectBackend backend, bool executab
 const char *z_direct_backend_runtime_object_cache_key(ZDirectBackend backend);
 size_t z_direct_backend_symbol_overhead(ZDirectBackend backend, bool has_readonly_data);
 bool z_direct_backend_supports_runtime_object(ZDirectBackend backend);
+const char *z_direct_runtime_link_blocker(const ZTargetInfo *target, bool needs_http_runtime);
 bool z_direct_backend_emitter_is_executable(const char *emitter);
 bool z_direct_backend_is_request_name(const char *requested_backend);
 bool z_direct_requested_backend_matches(const char *requested_backend, ZDirectBackend backend);
@@ -906,6 +952,11 @@ const char *z_direct_backend_reason(const ZTargetInfo *target);
 ZDirectBackend z_direct_backend_for_emit_kind(const ZTargetInfo *target, const char *emit_kind, const char *requested_backend);
 const char *z_direct_backend_emitter_for_emit_kind(const ZTargetInfo *target, const char *emit_kind, const char *requested_backend);
 const char *z_direct_backend_name_for_emit_kind(const ZTargetInfo *target, const char *emit_kind, const char *requested_backend);
+ZDirectReleaseTargetFacts z_direct_release_target_facts(const ZTargetInfo *target, const char *emit_kind, const char *requested_backend, const ZToolchainPlan *fallback_plan);
+ZDirectObjectBackendFacts z_direct_object_backend_facts(const ZTargetInfo *target, const char *emit_kind, const char *requested_backend, bool has_runtime_imports);
+ZDirectObjectTargetFacts z_direct_object_target_facts(const ZTargetInfo *target);
+ZDirectRuntimeObjectFacts z_direct_runtime_object_facts(const ZTargetInfo *target, bool needs_http_runtime);
+ZDirectExecutableTargetFacts z_direct_executable_target_facts(const ZTargetInfo *target, const char *requested_backend);
 const char *z_direct_backend_expected(const ZTargetInfo *target);
 const char *z_direct_backend_help(const ZTargetInfo *target);
 void z_append_http_runtime_json(ZBuf *buf, const ZTargetInfo *target);
