@@ -303,16 +303,35 @@ assertIncludes("call result provenance", callResultBody, "function_return_value_
 assertIncludes("call result provenance", callResultBody, "instantiate_call_provenance_entry");
 assertIncludes("call result provenance", callResultBody, "resolved_call_param_type_text");
 
-const namedCallBody = sliceBetween(checker, "static bool check_named_function_call_expected", "static bool check_expr_expected");
+const namedCallBody = sliceBetween(checker, "static bool check_named_function_call_expected", "static bool check_stdlib_table_arg_range_expected");
 assertIncludes("named call checking argument facts", namedCallBody, "resolve_named_function_call");
 assertIncludes("named call checking argument facts", namedCallBody, "call_resolution_record_param_facts");
 assertIncludes("named call checking argument facts", namedCallBody, "call_resolution_param_type_text");
 assertIncludes("named call checking storage effects", namedCallBody, "apply_checked_call_storage_effects");
 
-const stdlibTableCallBody = sliceBetween(checker, "static bool check_stdlib_table_arg_range_expected", "static bool check_expr_expected");
+const stdlibTableCallBody = sliceBetween(checker, "static bool check_stdlib_table_arg_range_expected", "static bool check_stdlib_allocator_arg");
 assertIncludes("stdlib table call checking argument facts", stdlibTableCallBody, "z_call_resolution_add_arg");
 assertIncludes("stdlib table call checking argument facts", stdlibTableCallBody, "call_resolution_param_type_text");
 assertIncludes("stdlib table call checking argument facts", stdlibTableCallBody, "std_call_arg_type");
+
+const stdlibTableDispatchBody = sliceBetween(checker, "static bool check_stdlib_table_call_expected", "static bool check_stdlib_known_call_expected");
+assertIncludes("stdlib table call checking argument facts", stdlibTableDispatchBody, "resolve_stdlib_call");
+assertIncludes("stdlib table call checking argument facts", stdlibTableDispatchBody, "check_stdlib_table_arg_range_expected");
+
+const choiceCallBody = sliceBetween(checker, "static bool check_choice_constructor_call_expected", "static bool check_shape_namespace_call_expected");
+assertIncludes("choice call checking argument facts", choiceCallBody, "resolve_choice_constructor_call");
+assertIncludes("choice call checking argument facts", choiceCallBody, "z_call_resolution_add_arg(&choice_resolution");
+assertIncludes("choice call checking argument facts", choiceCallBody, "call_resolution_param_type_text(&choice_resolution");
+
+const shapeNamespaceCallBody = sliceBetween(checker, "static bool check_shape_namespace_call_expected", "static bool check_constrained_interface_call_expected");
+assertIncludes("shape namespace call checking argument facts", shapeNamespaceCallBody, "call_resolution_record_param_facts");
+assertIncludes("shape namespace call checking argument facts", shapeNamespaceCallBody, "call_resolution_param_type_text");
+assertIncludes("shape namespace call checking storage effects", shapeNamespaceCallBody, "apply_checked_call_storage_effects");
+
+const constrainedInterfaceCallBody = sliceBetween(checker, "static bool check_constrained_interface_call_expected", "static bool check_world_stream_write_call_expected");
+assertIncludes("constrained interface call checking argument facts", constrainedInterfaceCallBody, "call_resolution_record_param_facts");
+assertIncludes("constrained interface call checking argument facts", constrainedInterfaceCallBody, "call_resolution_param_type_text");
+assertIncludes("constrained interface call checking storage effects", constrainedInterfaceCallBody, "apply_checked_call_storage_effects");
 
 const checkCallBody = sliceBetween(checker, "static bool check_expr_expected", "case EXPR_CAST");
 assertIncludes("call checking argument facts", checkCallBody, "call_resolution_record_param_facts");
@@ -353,13 +372,19 @@ const checkExprExpectedBody = sliceBetween(
   "static bool check_expr(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ZDiag *diag) {"
 );
 const callCase = sliceBetween(checkExprExpectedBody, "case EXPR_CALL:", "case EXPR_CAST:");
-assertIncludes("call checking stdlib table facts", callCase, "check_stdlib_table_arg_range_expected");
-assertIncludes("call checking choice argument facts", callCase, "z_call_resolution_add_arg(&choice_resolution");
-assertIncludes("call checking choice argument facts", callCase, "call_resolution_param_type_text(&choice_resolution");
+assertIncludes("call checking stdlib table facts", callCase, "check_stdlib_call_expected");
+assertIncludes("call checking choice argument facts", callCase, "check_choice_constructor_call_expected");
 const callCaseStorageApplications = (callCase.match(/apply_checked_call_storage_effects\(ctx, program, expr, scope, diag\)/g) ?? []).length;
 const namedCallStorageApplications = (namedCallBody.match(/apply_checked_call_storage_effects\(ctx, program, expr, scope, diag\)/g) ?? []).length;
-if (callCaseStorageApplications + namedCallStorageApplications < 4) {
-  fail(`EXPR_CALL provenance: expected storage-effect application for all user call forms, found ${callCaseStorageApplications + namedCallStorageApplications}`);
+const shapeNamespaceCallStorageApplications = (shapeNamespaceCallBody.match(/apply_checked_call_storage_effects\(ctx, program, expr, scope, diag\)/g) ?? []).length;
+const constrainedInterfaceCallStorageApplications = (constrainedInterfaceCallBody.match(/apply_checked_call_storage_effects\(ctx, program, expr, scope, diag\)/g) ?? []).length;
+const totalCallStorageApplications =
+  callCaseStorageApplications +
+  namedCallStorageApplications +
+  shapeNamespaceCallStorageApplications +
+  constrainedInterfaceCallStorageApplications;
+if (totalCallStorageApplications < 4) {
+  fail(`EXPR_CALL provenance: expected storage-effect application for all user call forms, found ${totalCallStorageApplications}`);
 }
 
 const lines = checker.split("\n");
