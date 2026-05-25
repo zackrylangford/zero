@@ -465,6 +465,7 @@ for (const fixture of [
   "conformance/check/pass/static-value-params.0",
   "conformance/check/pass/static-interface-basic.0",
   "conformance/check/pass/call-resolution-inspection.0",
+  "conformance/check/pass/call-resolution-edge-cases.0",
   "conformance/native/pass/static-interface-mutref.0",
   "conformance/native/pass/static-interface-static-param.0",
   "conformance/check/pass/top-level-const.0",
@@ -2581,6 +2582,11 @@ assert(callResolutionFsReadFacts.calls.some((item) => item.kind === "stdlib" && 
 const callResolutionPackageGraph = await execFileAsync(zero, ["graph", "--json", "examples/systems-package"]);
 const callResolutionPackageFacts = JSON.parse(callResolutionPackageGraph.stdout).callResolution;
 assert(callResolutionPackageFacts.calls.some((item) => item.calleeName === "cleanup" && item.path === "examples/systems-package/src/main.0" && item.line === 8));
+
+const callResolutionEdgeGraph = await execFileAsync(zero, ["graph", "--json", "conformance/check/pass/call-resolution-edge-cases.0"]);
+const callResolutionEdgeFacts = JSON.parse(callResolutionEdgeGraph.stdout).callResolution;
+assert(callResolutionEdgeFacts.calls.some((item) => item.kind === "function" && item.calleeName === "add" && item.owner === "constTotal" && item.returnType === "i32"));
+assert(callResolutionEdgeFacts.calls.some((item) => item.kind === "stdlib" && item.calleeName === "std.mem.len" && item.owner === "main" && item.args.some((arg) => arg.paramIndex === 0 && arg.actualType === "String")));
 
 const memorySize = await execFileAsync(zero, ["size", "--json", "--target", "linux-musl-x64", "examples/memory-package"]);
 const memorySizeBody = JSON.parse(memorySize.stdout);

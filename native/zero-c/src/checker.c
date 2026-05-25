@@ -7218,7 +7218,19 @@ static char *call_facts_type_text(const Program *program, const char *type, Gene
   return z_strdup(type ? type : "Unknown");
 }
 
+static void call_facts_seed_consts(CheckContext *ctx, const Program *program, Scope *scope) {
+  if (!program || !scope) return;
+  CheckContext const_ctx = {.program = program};
+  CheckContext *type_ctx = ctx ? ctx : &const_ctx;
+  for (size_t i = 0; i < program->consts.len; i++) {
+    const ConstDecl *item = &program->consts.items[i];
+    const char *type = item->type ? item->type : expr_type(type_ctx, program, item->expr, scope);
+    scope_add(scope, item->name, type ? type : "Unknown", false);
+  }
+}
+
 static void call_facts_seed_scope(const Program *program, Scope *scope, const Shape *shape, const Function *fun, GenericBinding *bindings, size_t binding_len) {
+  call_facts_seed_consts(NULL, program, scope);
   for (size_t i = 0; shape && i < shape->type_params.len; i++) {
     Param *param = &shape->type_params.items[i];
     if (param->is_static) scope_add_static_param(scope, param->name, param->type);
@@ -7323,6 +7335,21 @@ static void call_facts_collect_expr(ZBuf *buf, const SourceInput *input, bool *w
   if (expr->kind == EXPR_CALL) call_facts_write_resolution(buf, input, wrote, ctx, program, expr, scope, owner, instantiation_depth, instantiated_by);
 }
 
+static void call_facts_seed_match_payload_scope(CheckContext *ctx, const Program *program, const Stmt *stmt, const MatchArm *arm, Scope *match_scope, Scope *arm_scope) {
+  if (!ctx || !program || !stmt || stmt->kind != STMT_MATCH || !stmt->expr || !arm || !arm_scope || !arm->payload_name) return;
+  if (!arm->case_name || strcmp(arm->case_name, "_") == 0) return;
+  const char *match_type = stmt->resolved_type ? stmt->resolved_type : expr_type(ctx, program, stmt->expr, match_scope);
+  char *resolved_match_type = call_facts_type_text(program, match_type, ctx->return_provenance_expr_bindings, ctx->return_provenance_expr_binding_len);
+  const Choice *choice = find_choice(program, resolved_match_type);
+  free(resolved_match_type);
+  if (!choice) return;
+  const Param *item_case = find_case(&choice->cases, arm->case_name);
+  if (!item_case || !item_case->type) return;
+  char *payload_type = call_facts_type_text(program, item_case->type, ctx->return_provenance_expr_bindings, ctx->return_provenance_expr_binding_len);
+  scope_add(arm_scope, arm->payload_name, payload_type, false);
+  free(payload_type);
+}
+
 static void call_facts_collect_stmt(ZBuf *buf, const SourceInput *input, bool *wrote, CheckContext *ctx, const Program *program, const Stmt *stmt, Scope *scope, const char *owner, size_t instantiation_depth, const char *instantiated_by) {
   if (!stmt) return;
   call_facts_collect_expr(buf, input, wrote, ctx, program, stmt->target, scope, owner, instantiation_depth, instantiated_by);
@@ -7344,6 +7371,7 @@ static void call_facts_collect_stmt(ZBuf *buf, const SourceInput *input, bool *w
     MatchArm *arm = &stmt->match_arms.items[i];
     Scope arm_scope = {.parent = scope};
     call_facts_collect_expr(buf, input, wrote, ctx, program, arm->guard, &arm_scope, owner, instantiation_depth, instantiated_by);
+    call_facts_seed_match_payload_scope(ctx, program, stmt, arm, scope, &arm_scope);
     call_facts_collect_stmt_vec(buf, input, wrote, ctx, program, &arm->body, &arm_scope, owner, instantiation_depth, instantiated_by);
     scope_free(&arm_scope);
   }
@@ -7381,6 +7409,18 @@ static void call_facts_collect_shape_defaults(ZBuf *buf, const SourceInput *inpu
   scope_free(&scope);
 }
 
+static void call_facts_collect_consts(ZBuf *buf, const SourceInput *input, bool *wrote, const Program *program) {
+  Scope scope = {0};
+  CheckContext ctx = {.program = program};
+  for (size_t i = 0; program && i < program->consts.len; i++) {
+    ConstDecl *item = &program->consts.items[i];
+    call_facts_collect_expr(buf, input, wrote, &ctx, program, item->expr, &scope, item->name ? item->name : "", 0, NULL);
+    const char *type = item->type ? item->type : expr_type(&ctx, program, item->expr, &scope);
+    scope_add(&scope, item->name, type ? type : "Unknown", false);
+  }
+  scope_free(&scope);
+}
+
 void z_append_call_resolution_facts_json(ZBuf *buf, const SourceInput *input, const Program *program) {
   zbuf_append(buf, "{\"schemaVersion\":1,\"supportedKinds\":[");
   for (int kind = Z_CALL_FUNCTION; kind <= Z_CALL_CHOICE_CONSTRUCTOR; kind++) {
@@ -7389,6 +7429,7 @@ void z_append_call_resolution_facts_json(ZBuf *buf, const SourceInput *input, co
   }
   zbuf_append(buf, "],\"calls\":[");
   bool wrote = false;
+  call_facts_collect_consts(buf, input, &wrote, program);
   for (size_t i = 0; program && i < program->functions.len; i++) {
     call_facts_collect_function(buf, input, &wrote, program, NULL, &program->functions.items[i]);
   }
