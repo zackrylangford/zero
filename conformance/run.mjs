@@ -175,6 +175,21 @@ async function assertElfAarch64Object(path, exportedName) {
   assert(bytes.includes(Buffer.concat([Buffer.from(exportedName), Buffer.from([0])])));
 }
 
+function hasAarch64Instruction(bytes, expected) {
+  for (let offset = 0; offset + 4 <= bytes.length; offset++) {
+    if (bytes.readUInt32LE(offset) === expected) return true;
+  }
+  return false;
+}
+
+function hasAarch64CondBranch(bytes, cond) {
+  for (let offset = 0; offset + 4 <= bytes.length; offset++) {
+    const instruction = bytes.readUInt32LE(offset);
+    if ((instruction & 0xff000010) === 0x54000000 && (instruction & 0xf) === cond) return true;
+  }
+  return false;
+}
+
 async function assertElf64Executable(path) {
   const bytes = await readFile(path);
   assert.equal(bytes[0], 0x7f);
@@ -997,6 +1012,35 @@ await execFileAsync(zero, [
   arm64PrivateHelperObj,
 ]);
 await assertElfAarch64Object(arm64PrivateHelperObj, "main");
+
+const arm64CompareSource = `${outDir}/aarch64-typed-compare.0`;
+const arm64CompareObj = `${outDir}/aarch64-typed-compare.o`;
+await writeFile(arm64CompareSource, `export c fn main u32
+  let large u32 4294967295
+  if > large 0_u32
+    ret 7
+  ret 3
+
+export c fn wide_guard u32
+  let wide u64 4294967296
+  if != wide 0_u64
+    ret 9
+  ret 4
+`);
+await execFileAsync(zero, [
+  "build",
+  "--json",
+  "--emit",
+  "obj",
+  "--target",
+  "linux-arm64",
+  arm64CompareSource,
+  "--out",
+  arm64CompareObj,
+]);
+const arm64CompareBytes = await readFile(arm64CompareObj);
+assert(hasAarch64CondBranch(arm64CompareBytes, 9));
+assert(hasAarch64Instruction(arm64CompareBytes, 0xeb09011f));
 
 const memoryPackageMachOReadiness = await execFileAsync(zero, [
   "check",

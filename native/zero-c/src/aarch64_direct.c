@@ -69,14 +69,14 @@ static bool a64_const_u32_value(const IrValue *value, unsigned *out) {
   return true;
 }
 
-static unsigned a64_cond_for_compare(IrCompareOp op) {
+static unsigned a64_cond_for_compare(IrCompareOp op, bool uns) {
   switch (op) {
     case IR_CMP_EQ: return 0;
     case IR_CMP_NE: return 1;
-    case IR_CMP_LT: return 11;
-    case IR_CMP_LE: return 13;
-    case IR_CMP_GT: return 12;
-    case IR_CMP_GE: return 10;
+    case IR_CMP_LT: return uns ? 3 : 11;
+    case IR_CMP_LE: return uns ? 9 : 13;
+    case IR_CMP_GT: return uns ? 8 : 12;
+    case IR_CMP_GE: return uns ? 2 : 10;
   }
   return 0;
 }
@@ -329,9 +329,12 @@ static bool a64_emit_compare_to_reg_at(ZBuf *text, const IrFunction *fun, const 
   if (!a64_emit_store_scratch(text, 8, value->left->type, scratch_slot, value->left, diag)) return false;
   if (!a64_emit_value_to_reg_at(text, fun, value->right, 9, frame_size, scratch_slot + 1, ctx, diag)) return false;
   if (!a64_emit_load_scratch(text, 8, value->left->type, scratch_slot, value->left, diag)) return false;
-  z_aarch64_emit_cmp_w(text, 8, 9);
+  bool wide = a64_type_is_scalar64(value->left->type);
+  bool uns = a64_type_is_unsigned(value->left->type);
+  if (wide) z_aarch64_emit_cmp_x(text, 8, 9);
+  else z_aarch64_emit_cmp_w(text, 8, 9);
   z_aarch64_emit_movz_w(text, reg, 0);
-  size_t false_patch = z_aarch64_emit_b_cond_placeholder(text, a64_invert_cond(a64_cond_for_compare(value->compare_op)));
+  size_t false_patch = z_aarch64_emit_b_cond_placeholder(text, a64_invert_cond(a64_cond_for_compare(value->compare_op, uns)));
   z_aarch64_emit_movz_w(text, reg, 1);
   z_aarch64_patch_cond19(text, false_patch, text->len);
   return true;
