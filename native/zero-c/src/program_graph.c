@@ -7,13 +7,22 @@
 static void graph_append_json_string(ZBuf *buf, const char *text) {
   zbuf_append_char(buf, '"');
   for (const char *p = text ? text : ""; *p; p++) {
-    switch (*p) {
+    unsigned char ch = (unsigned char)*p;
+    switch (ch) {
       case '\\': zbuf_append(buf, "\\\\"); break;
       case '"': zbuf_append(buf, "\\\""); break;
       case '\n': zbuf_append(buf, "\\n"); break;
       case '\r': zbuf_append(buf, "\\r"); break;
       case '\t': zbuf_append(buf, "\\t"); break;
-      default: zbuf_append_char(buf, *p); break;
+      default:
+        if (ch < 0x20) {
+          const char *hex = "0123456789abcdef";
+          char escape[7] = {'\\', 'u', '0', '0', hex[ch >> 4], hex[ch & 0x0f], 0};
+          zbuf_append(buf, escape);
+        } else {
+          zbuf_append_char(buf, (char)ch);
+        }
+        break;
     }
   }
   zbuf_append_char(buf, '"');
@@ -230,6 +239,10 @@ static void graph_build_match_arms(ZProgramGraph *graph, const SourceInput *inpu
     ZProgramGraphNode *arm_node = graph_add_node(graph, "MatchArm", arm->case_name, NULL, arm->payload_name, path, graph_source_line(input, arm->line), arm->column);
     const char *arm_id = arm_node->id;
     graph_add_edge(graph, stmt_id, arm_id, "arm", i);
+    if (arm->range_end) {
+      ZProgramGraphNode *range_end = graph_add_node(graph, "Literal", NULL, NULL, arm->range_end, path, graph_source_line(input, arm->line), arm->column);
+      graph_add_edge(graph, arm_id, range_end->id, "rangeEnd", 0);
+    }
     if (arm->guard) graph_add_edge(graph, arm_id, graph_build_expr(graph, input, arm->guard), "guard", 0);
     const char *body = graph_build_block(graph, input, &arm->body, "body", path, arm->line, arm->column);
     graph_add_edge(graph, arm_id, body, "body", 0);
@@ -298,6 +311,7 @@ static void graph_build_top_level_params(ZProgramGraph *graph, const SourceInput
     const char *node_id = node->id;
     graph_add_edge(graph, owner_id, node_id, edge_kind, i);
     if (item->type) graph_add_type_ref(graph, node_id, "type", item->type, graph_source_path(input, item->line), graph_source_line(input, item->line), item->column, 0);
+    if (item->default_value) graph_add_edge(graph, node_id, graph_build_expr(graph, input, item->default_value), "default", 0);
   }
 }
 

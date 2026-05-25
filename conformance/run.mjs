@@ -2603,6 +2603,25 @@ assert(programGraphBody.nodes.some((item) => item.kind === "MethodCall"));
 assert(programGraphBody.edges.some((item) => item.kind === "body"));
 assert(programGraphBody.edges.some((item) => item.kind === "statement" && item.order === 0));
 
+const programGraphControlFixture = `${outDir}/program-graph-control.0`;
+await writeFile(programGraphControlFixture, "pub fn main Void world World !\n  check world.out.write \"\\x01 ok\\n\"\n");
+const programGraphControl = JSON.parse((await execFileAsync(zero, ["graph", "--json", programGraphControlFixture])).stdout).programGraph;
+assert(programGraphControl.nodes.some((item) => item.kind === "Literal" && item.value === "\u0001 ok\n"));
+
+const programGraphMatchRanges = JSON.parse((await execFileAsync(zero, ["graph", "--json", "conformance/native/pass/match-scalar-guards.0"])).stdout).programGraph;
+const programGraphRangeArm = programGraphMatchRanges.nodes.find((item) => item.kind === "MatchArm" && item.name === "1");
+assert(programGraphRangeArm);
+const programGraphRangeEdge = programGraphMatchRanges.edges.find((item) => item.from === programGraphRangeArm.id && item.kind === "rangeEnd");
+assert(programGraphRangeEdge);
+assert(programGraphMatchRanges.nodes.some((item) => item.id === programGraphRangeEdge.to && item.kind === "Literal" && item.value === "3"));
+
+const programGraphShapeDefaults = JSON.parse((await execFileAsync(zero, ["graph", "--json", "conformance/check/pass/shape-field-defaults.0"])).stdout).programGraph;
+const programGraphDefaultField = programGraphShapeDefaults.nodes.find((item) => item.kind === "Field" && item.name === "left");
+assert(programGraphDefaultField);
+const programGraphDefaultEdge = programGraphShapeDefaults.edges.find((item) => item.from === programGraphDefaultField.id && item.kind === "default");
+assert(programGraphDefaultEdge);
+assert(programGraphShapeDefaults.nodes.some((item) => item.id === programGraphDefaultEdge.to && item.kind === "Literal" && item.value === "1"));
+
 const memorySize = await execFileAsync(zero, ["size", "--json", "--target", "linux-musl-x64", "examples/memory-package"]);
 const memorySizeBody = JSON.parse(memorySize.stdout);
 assert.equal(memorySizeBody.target, "linux-musl-x64");
