@@ -2638,6 +2638,10 @@ const programGraphViewCoverage = [
   ["radix-suffix-literals", "conformance/native/pass/radix-suffix-literals.0", [/ret 0x20_usize/, /1_024_usize/, /0x2a_u8/]],
   ["test-blocks", "conformance/native/pass/test-blocks.0", [/test "addition works"/]],
   ["type-alias-basic", "conformance/native/pass/type-alias-basic.0", [/let count ByteCount 4_usize/]],
+  ["c-abi-export", "conformance/native/pass/c-abi-export.0", [/extern type CPoint/, /export c fn zero_add i32 a i32 b i32/]],
+  ["const-layout", "conformance/native/pass/const-layout.0", [/extern type CPoint/, /packed type Header/]],
+  ["c-header-import", "conformance/check/pass/c-header-import.0", [/extern c "conformance\/c\/simple\.h" as c/]],
+  ["direct-call-add", "examples/direct-call-add.0", [/export c fn main i32 a i32 b i32/]],
   ["std-math", "examples/std-math.0", [/pub fn main Void world World !/, /std\.math\.minU32 8 3/]],
 ];
 for (const [name, fixture, patterns] of programGraphViewCoverage) {

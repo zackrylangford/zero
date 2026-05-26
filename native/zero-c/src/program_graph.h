@@ -6,6 +6,7 @@
 typedef enum {
   Z_PROGRAM_GRAPH_NODE_MODULE,
   Z_PROGRAM_GRAPH_NODE_IMPORT,
+  Z_PROGRAM_GRAPH_NODE_C_IMPORT,
   Z_PROGRAM_GRAPH_NODE_CONST,
   Z_PROGRAM_GRAPH_NODE_TYPE_ALIAS,
   Z_PROGRAM_GRAPH_NODE_SHAPE,
@@ -86,6 +87,7 @@ typedef struct {
   bool is_mutable;
   bool is_static;
   bool fallible;
+  bool export_c;
 } ZProgramGraphNode;
 
 typedef struct {

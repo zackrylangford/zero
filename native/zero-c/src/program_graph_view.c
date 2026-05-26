@@ -39,6 +39,21 @@ static const ZProgramGraphNode *view_ordered_node(const ZProgramGraph *graph, co
   return edge ? view_find_node(graph, edge->to) : NULL;
 }
 
+static const ZProgramGraphEdge *view_next_edge_by_order(const ZProgramGraph *graph, const char *from, const char *kind, bool have_last, size_t last_order) {
+  const ZProgramGraphEdge *best = NULL;
+  for (size_t i = 0; graph && from && kind && i < graph->edge_len; i++) {
+    const ZProgramGraphEdge *edge = &graph->edges[i];
+    if (edge->target != Z_PROGRAM_GRAPH_EDGE_TARGET_NODE ||
+        !view_text_eq(edge->from, from) ||
+        !view_text_eq(edge->kind, kind) ||
+        (have_last && edge->order <= last_order)) {
+      continue;
+    }
+    if (!best || edge->order < best->order) best = edge;
+  }
+  return best;
+}
+
 static size_t view_edge_count(const ZProgramGraph *graph, const char *from, const char *kind) {
   size_t count = 0;
   for (size_t i = 0; graph && from && kind && i < graph->edge_len; i++) {
@@ -523,6 +538,7 @@ static void view_append_function(ZBuf *buf, const ZProgramGraph *graph, const ZP
     return;
   }
   if (fun->is_public) zbuf_append(buf, "pub ");
+  if (fun->export_c) zbuf_append(buf, "export c ");
   zbuf_append(buf, "fn ");
   view_append_name(buf, fun->name);
   view_append_type_param_list(buf, graph, fun);
@@ -574,7 +590,12 @@ static void view_append_field_like(ZBuf *buf, const ZProgramGraph *graph, const 
 
 static void view_append_type_like(ZBuf *buf, const ZProgramGraph *graph, const ZProgramGraphNode *node, const char *keyword, const char *edge_kind) {
   if (node->is_public) zbuf_append(buf, "pub ");
-  zbuf_append(buf, keyword);
+  if (node->kind == Z_PROGRAM_GRAPH_NODE_SHAPE && (view_text_eq(node->value, "extern") || view_text_eq(node->value, "packed"))) {
+    zbuf_append(buf, node->value);
+    zbuf_append(buf, " type");
+  } else {
+    zbuf_append(buf, keyword);
+  }
   zbuf_append_char(buf, ' ');
   view_append_name(buf, node->name);
   view_append_type_param_list(buf, graph, node);
@@ -605,10 +626,21 @@ static void view_append_import(ZBuf *buf, const ZProgramGraphNode *node) {
   zbuf_append_char(buf, '\n');
 }
 
+static void view_append_c_import(ZBuf *buf, const ZProgramGraphNode *node) {
+  zbuf_append(buf, "extern c ");
+  view_append_string(buf, node->value ? node->value : "");
+  zbuf_append(buf, " as ");
+  view_append_name(buf, node->name);
+  zbuf_append_char(buf, '\n');
+}
+
 static void view_append_decl(ZBuf *buf, const ZProgramGraph *graph, const ZProgramGraphNode *node) {
   switch (node->kind) {
     case Z_PROGRAM_GRAPH_NODE_IMPORT:
       view_append_import(buf, node);
+      break;
+    case Z_PROGRAM_GRAPH_NODE_C_IMPORT:
+      view_append_c_import(buf, node);
       break;
     case Z_PROGRAM_GRAPH_NODE_CONST:
       view_append_const(buf, graph, node);
@@ -638,12 +670,15 @@ static void view_append_decl(ZBuf *buf, const ZProgramGraph *graph, const ZProgr
 }
 
 static void view_append_top_level(ZBuf *buf, const ZProgramGraph *graph, const ZProgramGraphNode *module, const char *edge_kind) {
-  size_t total = view_edge_count(graph, module ? module->id : NULL, edge_kind);
-  size_t seen = 0;
-  for (size_t order = 0; seen < total; order++) {
-    const ZProgramGraphNode *node = view_ordered_node(graph, module->id, edge_kind, order);
+  bool have_last = false;
+  size_t last_order = 0;
+  for (;;) {
+    const ZProgramGraphEdge *edge = view_next_edge_by_order(graph, module ? module->id : NULL, edge_kind, have_last, last_order);
+    if (!edge) break;
+    const ZProgramGraphNode *node = view_find_node(graph, edge->to);
+    last_order = edge->order;
+    have_last = true;
     if (!node) continue;
-    seen++;
     view_append_decl(buf, graph, node);
   }
 }
@@ -654,6 +689,7 @@ static void view_append_module(ZBuf *buf, const ZProgramGraph *graph, const ZPro
     view_append_name(buf, module->name);
     zbuf_append_char(buf, '\n');
   }
+  view_append_top_level(buf, graph, module, "cImport");
   view_append_top_level(buf, graph, module, "import");
   view_append_top_level(buf, graph, module, "const");
   view_append_top_level(buf, graph, module, "alias");

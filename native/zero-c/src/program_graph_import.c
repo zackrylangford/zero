@@ -271,6 +271,7 @@ static void graph_build_function(ZProgramGraph *graph, const SourceInput *input,
   const char *node_id = node->id;
   node->is_public = fun->is_public;
   node->fallible = fun->raises;
+  node->export_c = fun->export_c;
   graph_add_edge(graph, owner_id, node_id, edge_kind, order);
   graph_build_params(graph, input, &fun->type_params, node_id, "typeParam");
   graph_build_params(graph, input, &fun->params, node_id, "param");
@@ -306,6 +307,12 @@ static void graph_build_modules(ZProgramGraph *graph, const SourceInput *input) 
 }
 
 static void graph_build_imports(ZProgramGraph *graph, const SourceInput *input, const Program *program) {
+  for (size_t i = 0; program && i < program->c_imports.len; i++) {
+    const CImport *item = &program->c_imports.items[i];
+    const char *path = graph_source_path(input, item->line);
+    ZProgramGraphNode *node = graph_add_node(graph, Z_PROGRAM_GRAPH_NODE_C_IMPORT, item->alias, NULL, item->header, path, graph_source_line(input, item->line), item->column);
+    graph_add_edge(graph, graph_module_id_for_line(graph, input, item->line), node->id, "cImport", i);
+  }
   for (size_t i = 0; program && i < program->use_imports.len; i++) {
     const UseImport *item = &program->use_imports.items[i];
     const char *path = graph_source_path(input, item->line);
