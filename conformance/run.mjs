@@ -2618,6 +2618,8 @@ const programGraphViewJson = JSON.parse((await execFileAsync(zero, ["graph", "vi
 const programGraphViewOut = await execFileAsync(zero, ["graph", "view", "--out", programGraphViewPath, programGraphDumpPath]);
 const programGraphViewFile = await readFile(programGraphViewPath, "utf8");
 const programGraphViewOutJson = JSON.parse((await execFileAsync(zero, ["graph", "view", "--json", "--out", programGraphViewPath, programGraphDumpPath])).stdout);
+const programGraphRoundtrip = await execFileAsync(zero, ["graph", "roundtrip", "examples/hello.0"]);
+const programGraphRoundtripJson = JSON.parse((await execFileAsync(zero, ["graph", "roundtrip", "--json", "examples/hello.0"])).stdout);
 await execFileAsync(zero, ["graph", "dump", "--out", programGraphRichPath, "conformance/native/pass/open-ended-slices.0"]);
 await execFileAsync(zero, ["graph", "view", "--out", programGraphRichViewPath, programGraphRichPath]);
 const programGraphRichView = await readFile(programGraphRichViewPath, "utf8");
@@ -2661,6 +2663,17 @@ for (const [name, fixture, patterns] of programGraphViewCoverage) {
   if (name === "systems-package") assert.doesNotMatch(view, /^use (helpers|types)$/m);
   if (name === "std-math") assert.doesNotMatch(view, /fn __zero_std_/);
 }
+for (const fixture of [
+  "conformance/native/pass/open-ended-slices.0",
+  "conformance/native/pass/float-char-casts.0",
+  "examples/std-math.0",
+]) {
+  const roundtrip = JSON.parse((await execFileAsync(zero, ["graph", "roundtrip", "--json", fixture])).stdout);
+  assert.equal(roundtrip.ok, true);
+  assert.equal(roundtrip.semanticStable, true);
+  assert.equal(roundtrip.comparison.ok, true);
+  assert.deepEqual(roundtrip.semanticCounts.original, roundtrip.semanticCounts.roundtrip);
+}
 assert.equal(programGraphBody.schemaVersion, 1);
 assert.equal(programGraphBody.canonicalSource, false);
 assert.equal(programGraphBody.moduleIdentity, "module:hello");
@@ -2685,6 +2698,17 @@ assert.equal(programGraphViewJson.view, programGraphView);
 assert.equal(programGraphViewOutJson.ok, true);
 assert.equal(programGraphViewOutJson.saved.path, programGraphViewPath);
 assert.equal(programGraphViewOutJson.view, null);
+assert.equal(programGraphRoundtrip.stdout, "program graph roundtrip ok\n");
+assert.equal(programGraphRoundtripJson.ok, true);
+assert.equal(programGraphRoundtripJson.canonicalSource, false);
+assert.equal(programGraphRoundtripJson.semanticStable, true);
+assert.equal(programGraphRoundtripJson.moduleIdentity, "module:hello");
+assert.equal(programGraphRoundtripJson.roundtripModuleIdentity, "module:hello");
+assert.equal(programGraphRoundtripJson.originalGraphHash, programGraphBody.graphHash);
+assert.match(programGraphRoundtripJson.roundtripGraphHash, /^graph:[0-9a-f]{16}$/);
+assert.deepEqual(programGraphRoundtripJson.semanticCounts.original, programGraphRoundtripJson.semanticCounts.roundtrip);
+assert.equal(programGraphRoundtripJson.comparison.ok, true);
+assert.equal(programGraphRoundtripJson.view, programGraphView);
 assert.deepEqual(programGraphDumpJson, programGraphBody);
 assert.match(programGraphDump, /^zero-program-graph v1\n/);
 assert.match(programGraphDump, /moduleIdentity "module:hello"/);
