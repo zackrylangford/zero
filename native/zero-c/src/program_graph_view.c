@@ -39,6 +39,20 @@ static const ZProgramGraphNode *view_ordered_node(const ZProgramGraph *graph, co
   return edge ? view_find_node(graph, edge->to) : NULL;
 }
 
+static const ZProgramGraphEdge *view_next_edge_by_order(const ZProgramGraph *graph, const char *from, const char *kind, bool have_last, size_t last_order);
+
+static const ZProgramGraphNode *view_nth_node_by_order(const ZProgramGraph *graph, const char *from, const char *kind, size_t index) {
+  bool have_last = false;
+  size_t last_order = 0;
+  for (size_t rank = 0;; rank++) {
+    const ZProgramGraphEdge *edge = view_next_edge_by_order(graph, from, kind, have_last, last_order);
+    if (!edge) return NULL;
+    last_order = edge->order;
+    have_last = true;
+    if (rank == index) return view_find_node(graph, edge->to);
+  }
+}
+
 static const ZProgramGraphEdge *view_next_edge_by_order(const ZProgramGraph *graph, const char *from, const char *kind, bool have_last, size_t last_order) {
   const ZProgramGraphEdge *best = NULL;
   for (size_t i = 0; graph && from && kind && i < graph->edge_len; i++) {
@@ -140,6 +154,14 @@ static bool view_module_is_stdlib(const ZProgramGraphNode *node) {
   return node && node->kind == Z_PROGRAM_GRAPH_NODE_MODULE && view_text_starts_with(node->path, "std/");
 }
 
+static bool view_module_is_rendered(const ZProgramGraph *graph, const char *name) {
+  for (size_t i = 0; graph && name && i < graph->node_len; i++) {
+    const ZProgramGraphNode *node = &graph->nodes[i];
+    if (node->kind == Z_PROGRAM_GRAPH_NODE_MODULE && !view_module_is_stdlib(node) && view_text_eq(node->name, name)) return true;
+  }
+  return false;
+}
+
 static bool view_expr_needs_group(const ZProgramGraphNode *node) {
   if (!node) return false;
   switch (node->kind) {
@@ -169,10 +191,18 @@ static void view_append_expr_arg(ZBuf *buf, const ZProgramGraph *graph, const ZP
 static void view_append_type_args(ZBuf *buf, const ZProgramGraph *graph, const ZProgramGraphNode *node) {
   if (view_edge_count(graph, node ? node->id : NULL, "typeArg") == 0) return;
   zbuf_append_char(buf, '<');
-  for (size_t order = 0;; order++) {
-    const ZProgramGraphNode *type = view_ordered_node(graph, node->id, "typeArg", order);
-    if (!type) break;
-    if (order > 0) zbuf_append(buf, ", ");
+  bool have_last = false;
+  size_t last_order = 0;
+  bool first = true;
+  for (;;) {
+    const ZProgramGraphEdge *edge = view_next_edge_by_order(graph, node->id, "typeArg", have_last, last_order);
+    if (!edge) break;
+    const ZProgramGraphNode *type = view_find_node(graph, edge->to);
+    last_order = edge->order;
+    have_last = true;
+    if (!type) continue;
+    if (!first) zbuf_append(buf, ", ");
+    first = false;
     view_append_name(buf, type->type);
   }
   zbuf_append_char(buf, '>');
@@ -199,10 +229,18 @@ static void view_append_call_like(ZBuf *buf, const ZProgramGraph *graph, const Z
   view_append_type_args(buf, graph, node);
   if (paren_args) {
     zbuf_append_char(buf, '(');
-    for (size_t order = 0;; order++) {
-      const ZProgramGraphNode *arg = view_ordered_node(graph, node->id, "arg", order);
-      if (!arg) break;
-      if (order > 0) zbuf_append(buf, ", ");
+    bool have_last = false;
+    size_t last_order = 0;
+    bool first = true;
+    for (;;) {
+      const ZProgramGraphEdge *edge = view_next_edge_by_order(graph, node->id, "arg", have_last, last_order);
+      if (!edge) break;
+      const ZProgramGraphNode *arg = view_find_node(graph, edge->to);
+      last_order = edge->order;
+      have_last = true;
+      if (!arg) continue;
+      if (!first) zbuf_append(buf, ", ");
+      first = false;
       view_append_expr(buf, graph, arg);
     }
     zbuf_append_char(buf, ')');
@@ -212,9 +250,15 @@ static void view_append_call_like(ZBuf *buf, const ZProgramGraph *graph, const Z
     zbuf_append(buf, "()");
     return;
   }
-  for (size_t order = 0;; order++) {
-    const ZProgramGraphNode *arg = view_ordered_node(graph, node->id, "arg", order);
-    if (!arg) break;
+  bool have_last = false;
+  size_t last_order = 0;
+  for (;;) {
+    const ZProgramGraphEdge *edge = view_next_edge_by_order(graph, node->id, "arg", have_last, last_order);
+    if (!edge) break;
+    const ZProgramGraphNode *arg = view_find_node(graph, edge->to);
+    last_order = edge->order;
+    have_last = true;
+    if (!arg) continue;
     zbuf_append_char(buf, ' ');
     view_append_expr_arg(buf, graph, arg);
   }
@@ -226,6 +270,52 @@ static void view_append_postfix_left(ZBuf *buf, const ZProgramGraph *graph, cons
     return;
   }
   view_append_expr(buf, graph, node);
+}
+
+static void view_append_shape_literal(ZBuf *buf, const ZProgramGraph *graph, const ZProgramGraphNode *node) {
+  view_append_name(buf, node->name);
+  zbuf_append(buf, " .");
+  bool have_last = false;
+  size_t last_order = 0;
+  for (;;) {
+    const ZProgramGraphEdge *edge = view_next_edge_by_order(graph, node->id, "field", have_last, last_order);
+    if (!edge) break;
+    const ZProgramGraphNode *field = view_find_node(graph, edge->to);
+    last_order = edge->order;
+    have_last = true;
+    if (!field) continue;
+    zbuf_append_char(buf, ' ');
+    view_append_name(buf, field->name);
+    zbuf_append_char(buf, ' ');
+    view_append_expr_arg(buf, graph, view_ordered_node(graph, field->id, "value", 0));
+  }
+}
+
+static void view_append_array_literal(ZBuf *buf, const ZProgramGraph *graph, const ZProgramGraphNode *node) {
+  if (view_text_eq(node->value, "repeat")) {
+    zbuf_append_char(buf, '[');
+    view_append_expr(buf, graph, view_nth_node_by_order(graph, node->id, "arg", 0));
+    zbuf_append_char(buf, ';');
+    view_append_expr(buf, graph, view_nth_node_by_order(graph, node->id, "arg", 1));
+    zbuf_append_char(buf, ']');
+    return;
+  }
+  zbuf_append(buf, "([");
+  bool have_last = false;
+  size_t last_order = 0;
+  bool first = true;
+  for (;;) {
+    const ZProgramGraphEdge *edge = view_next_edge_by_order(graph, node->id, "arg", have_last, last_order);
+    if (!edge) break;
+    const ZProgramGraphNode *item = view_find_node(graph, edge->to);
+    last_order = edge->order;
+    have_last = true;
+    if (!item) continue;
+    if (!first) zbuf_append(buf, ", ");
+    first = false;
+    view_append_expr(buf, graph, item);
+  }
+  zbuf_append(buf, "])");
 }
 
 static void view_append_expr(ZBuf *buf, const ZProgramGraph *graph, const ZProgramGraphNode *node) {
@@ -250,6 +340,7 @@ static void view_append_expr(ZBuf *buf, const ZProgramGraph *graph, const ZProgr
         zbuf_append_char(buf, '.');
       }
       view_append_name(buf, node->name);
+      view_append_type_args(buf, graph, node);
       break;
     }
     case Z_PROGRAM_GRAPH_NODE_CALL:
@@ -278,34 +369,10 @@ static void view_append_expr(ZBuf *buf, const ZProgramGraph *graph, const ZProgr
       break;
     }
     case Z_PROGRAM_GRAPH_NODE_SHAPE_LITERAL:
-      view_append_name(buf, node->name);
-      zbuf_append(buf, " .");
-      for (size_t order = 0;; order++) {
-        const ZProgramGraphNode *field = view_ordered_node(graph, node->id, "field", order);
-        if (!field) break;
-        zbuf_append_char(buf, ' ');
-        view_append_name(buf, field->name);
-        zbuf_append_char(buf, ' ');
-        view_append_expr_arg(buf, graph, view_ordered_node(graph, field->id, "value", 0));
-      }
+      view_append_shape_literal(buf, graph, node);
       break;
     case Z_PROGRAM_GRAPH_NODE_ARRAY_LITERAL:
-      if (view_text_eq(node->value, "repeat")) {
-        zbuf_append_char(buf, '[');
-        view_append_expr(buf, graph, view_ordered_node(graph, node->id, "arg", 0));
-        zbuf_append_char(buf, ';');
-        view_append_expr(buf, graph, view_ordered_node(graph, node->id, "arg", 1));
-        zbuf_append_char(buf, ']');
-      } else {
-        zbuf_append(buf, "([");
-        for (size_t order = 0;; order++) {
-          const ZProgramGraphNode *item = view_ordered_node(graph, node->id, "arg", order);
-          if (!item) break;
-          if (order > 0) zbuf_append(buf, ", ");
-          view_append_expr(buf, graph, item);
-        }
-        zbuf_append(buf, "])");
-      }
+      view_append_array_literal(buf, graph, node);
       break;
     case Z_PROGRAM_GRAPH_NODE_BORROW:
       zbuf_append(buf, node->is_mutable ? "&mut " : "&");
@@ -445,9 +512,15 @@ static void view_append_stmt(ZBuf *buf, const ZProgramGraph *graph, const ZProgr
       zbuf_append(buf, "match ");
       view_append_expr(buf, graph, view_ordered_node(graph, node->id, "expr", 0));
       zbuf_append_char(buf, '\n');
-      for (size_t order = 0;; order++) {
-        const ZProgramGraphNode *arm = view_ordered_node(graph, node->id, "arm", order);
-        if (!arm) break;
+      bool have_last = false;
+      size_t last_order = 0;
+      for (;;) {
+        const ZProgramGraphEdge *edge = view_next_edge_by_order(graph, node->id, "arm", have_last, last_order);
+        if (!edge) break;
+        const ZProgramGraphNode *arm = view_find_node(graph, edge->to);
+        last_order = edge->order;
+        have_last = true;
+        if (!arm) continue;
         view_append_match_arm(buf, graph, arm, indent + 1);
       }
       break;
@@ -474,9 +547,15 @@ static void view_append_block(ZBuf *buf, const ZProgramGraph *graph, const ZProg
     zbuf_append(buf, "# missing graph block\n");
     return;
   }
-  for (size_t order = 0;; order++) {
-    const ZProgramGraphNode *stmt = view_ordered_node(graph, block->id, "statement", order);
-    if (!stmt) break;
+  bool have_last = false;
+  size_t last_order = 0;
+  for (;;) {
+    const ZProgramGraphEdge *edge = view_next_edge_by_order(graph, block->id, "statement", have_last, last_order);
+    if (!edge) break;
+    const ZProgramGraphNode *stmt = view_find_node(graph, edge->to);
+    last_order = edge->order;
+    have_last = true;
+    if (!stmt) continue;
     view_append_stmt(buf, graph, stmt, indent);
   }
 }
@@ -484,10 +563,18 @@ static void view_append_block(ZBuf *buf, const ZProgramGraph *graph, const ZProg
 static void view_append_type_param_list(ZBuf *buf, const ZProgramGraph *graph, const ZProgramGraphNode *owner) {
   if (view_edge_count(graph, owner ? owner->id : NULL, "typeParam") == 0) return;
   zbuf_append_char(buf, '<');
-  for (size_t order = 0;; order++) {
-    const ZProgramGraphNode *param = view_ordered_node(graph, owner->id, "typeParam", order);
-    if (!param) break;
-    if (order > 0) zbuf_append(buf, ", ");
+  bool have_last = false;
+  size_t last_order = 0;
+  bool first = true;
+  for (;;) {
+    const ZProgramGraphEdge *edge = view_next_edge_by_order(graph, owner->id, "typeParam", have_last, last_order);
+    if (!edge) break;
+    const ZProgramGraphNode *param = view_find_node(graph, edge->to);
+    last_order = edge->order;
+    have_last = true;
+    if (!param) continue;
+    if (!first) zbuf_append(buf, ", ");
+    first = false;
     if (param->is_static) zbuf_append(buf, "static ");
     view_append_name(buf, param->name);
     if (param->type && param->type[0]) {
@@ -499,9 +586,15 @@ static void view_append_type_param_list(ZBuf *buf, const ZProgramGraph *graph, c
 }
 
 static void view_append_signature_params(ZBuf *buf, const ZProgramGraph *graph, const ZProgramGraphNode *fun) {
-  for (size_t order = 0;; order++) {
-    const ZProgramGraphNode *param = view_ordered_node(graph, fun->id, "param", order);
-    if (!param) break;
+  bool have_last = false;
+  size_t last_order = 0;
+  for (;;) {
+    const ZProgramGraphEdge *edge = view_next_edge_by_order(graph, fun->id, "param", have_last, last_order);
+    if (!edge) break;
+    const ZProgramGraphNode *param = view_find_node(graph, edge->to);
+    last_order = edge->order;
+    have_last = true;
+    if (!param) continue;
     zbuf_append_char(buf, ' ');
     view_append_name(buf, param->name);
     if (param->type && param->type[0]) {
@@ -519,10 +612,18 @@ static void view_append_effects(ZBuf *buf, const ZProgramGraph *graph, const ZPr
     return;
   }
   zbuf_append(buf, " ![");
-  for (size_t order = 0;; order++) {
-    const ZProgramGraphNode *error = view_ordered_node(graph, fun->id, "error", order);
-    if (!error) break;
-    if (order > 0) zbuf_append_char(buf, ' ');
+  bool have_last = false;
+  size_t last_order = 0;
+  bool first = true;
+  for (;;) {
+    const ZProgramGraphEdge *edge = view_next_edge_by_order(graph, fun->id, "error", have_last, last_order);
+    if (!edge) break;
+    const ZProgramGraphNode *error = view_find_node(graph, edge->to);
+    last_order = edge->order;
+    have_last = true;
+    if (!error) continue;
+    if (!first) zbuf_append_char(buf, ' ');
+    first = false;
     view_append_name(buf, error->name);
   }
   zbuf_append_char(buf, ']');
@@ -604,14 +705,26 @@ static void view_append_type_like(ZBuf *buf, const ZProgramGraph *graph, const Z
     zbuf_append(buf, node->type);
   }
   zbuf_append_char(buf, '\n');
-  for (size_t order = 0;; order++) {
-    const ZProgramGraphNode *child = view_ordered_node(graph, node->id, edge_kind, order);
-    if (!child) break;
+  bool have_last = false;
+  size_t last_order = 0;
+  for (;;) {
+    const ZProgramGraphEdge *edge = view_next_edge_by_order(graph, node->id, edge_kind, have_last, last_order);
+    if (!edge) break;
+    const ZProgramGraphNode *child = view_find_node(graph, edge->to);
+    last_order = edge->order;
+    have_last = true;
+    if (!child) continue;
     view_append_field_like(buf, graph, child, 1);
   }
-  for (size_t order = 0;; order++) {
-    const ZProgramGraphNode *method = view_ordered_node(graph, node->id, "method", order);
-    if (!method) break;
+  have_last = false;
+  last_order = 0;
+  for (;;) {
+    const ZProgramGraphEdge *edge = view_next_edge_by_order(graph, node->id, "method", have_last, last_order);
+    if (!edge) break;
+    const ZProgramGraphNode *method = view_find_node(graph, edge->to);
+    last_order = edge->order;
+    have_last = true;
+    if (!method) continue;
     view_append_function(buf, graph, method, 1);
   }
 }
@@ -637,6 +750,7 @@ static void view_append_c_import(ZBuf *buf, const ZProgramGraphNode *node) {
 static void view_append_decl(ZBuf *buf, const ZProgramGraph *graph, const ZProgramGraphNode *node) {
   switch (node->kind) {
     case Z_PROGRAM_GRAPH_NODE_IMPORT:
+      if (view_module_is_rendered(graph, node->name)) break;
       view_append_import(buf, node);
       break;
     case Z_PROGRAM_GRAPH_NODE_C_IMPORT:

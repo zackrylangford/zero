@@ -2641,7 +2641,10 @@ const programGraphViewCoverage = [
   ["c-abi-export", "conformance/native/pass/c-abi-export.0", [/extern type CPoint/, /export c fn zero_add i32 a i32 b i32/]],
   ["const-layout", "conformance/native/pass/const-layout.0", [/extern type CPoint/, /packed type Header/]],
   ["c-header-import", "conformance/check/pass/c-header-import.0", [/extern c "conformance\/c\/simple\.h" as c/]],
+  ["constructors-defaults", "conformance/native/pass/constructors-defaults.0", [/FixedVec\.init<u8, 4>/]],
   ["direct-call-add", "examples/direct-call-add.0", [/export c fn main i32 a i32 b i32/]],
+  ["generic-static-explicit-shadowing", "conformance/check/pass/generic-static-explicit-shadowing.0", [/Helper\.needsSame<N> left right/]],
+  ["systems-package", "examples/systems-package", [/# Module: helpers/, /# Module: types/, /pub fn main Void world World !/]],
   ["std-math", "examples/std-math.0", [/pub fn main Void world World !/, /std\.math\.minU32 8 3/]],
 ];
 for (const [name, fixture, patterns] of programGraphViewCoverage) {
@@ -2655,6 +2658,7 @@ for (const [name, fixture, patterns] of programGraphViewCoverage) {
   await execFileAsync(zero, ["check", viewPath]);
   for (const pattern of patterns) assert.match(view, pattern);
   assert.doesNotMatch(view, /fn __zero_test_/);
+  if (name === "systems-package") assert.doesNotMatch(view, /^use (helpers|types)$/m);
   if (name === "std-math") assert.doesNotMatch(view, /fn __zero_std_/);
 }
 assert.equal(programGraphBody.schemaVersion, 1);
