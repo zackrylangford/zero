@@ -212,6 +212,36 @@ static void records_block_open_locations(void) {
   z_free_canonical_text_tokens(&tokens);
 }
 
+static void records_node_token_spans(void) {
+  const char *source =
+    "fn main() -> Void {\n"
+    "    let value: i32 = 1\n"
+    "    return value\n"
+    "}\n";
+  ZDiag diag = {0};
+  ZCanonicalFacts facts = {0};
+  ZCanonicalTokenVec tokens = z_canonical_text_tokenize(source, &diag);
+  expect(diag.code == 0, diag.message);
+  ZCanonicalTree tree = {0};
+  expect(z_canonical_text_parse(&tokens, &tree, &facts, &diag), diag.message);
+  bool saw_decl = false;
+  bool saw_stmt = false;
+  bool saw_block = false;
+  for (size_t i = 0; i < tree.len; i++) {
+    ZCanonicalNode *node = &tree.items[i];
+    expect(node->token_count > 0, "expected canonical tree nodes to record token spans");
+    expect(node->first_token + node->token_count <= tokens.len, "expected canonical node span inside token stream");
+    if (node->kind == Z_CANON_NODE_DECL) saw_decl = true;
+    if (node->kind == Z_CANON_NODE_STMT) saw_stmt = true;
+    if (node->kind == Z_CANON_NODE_BLOCK) saw_block = true;
+  }
+  expect(saw_decl, "expected declaration node span");
+  expect(saw_stmt, "expected statement node span");
+  expect(saw_block, "expected block node span");
+  z_free_canonical_text_tree(&tree);
+  z_free_canonical_text_tokens(&tokens);
+}
+
 static void parses_public_declarations_and_extern_types(void) {
   const char *source =
     "pub extern type CPoint\n"
@@ -293,6 +323,8 @@ static void rejects_noncanonical_spellings(void) {
   expect_rejects("fn bad() -> Void {\n    let value: i32 = +\n}\n", "operandless operator");
   expect_rejects("fn bad() -> Void {\n    let value: i32 = ;\n}\n", "unexpected expression punctuation");
   expect_rejects("fn bad() -> Void {\n    let value: i32 = 1 +\n}\n", "trailing expression operator");
+  expect_rejects("fn bad() -> Void {\n    let value: i32 = (items[0)]\n}\n", "mismatched expression delimiters");
+  expect_rejects("fn if() -> Void {\n    return\n}\n", "reserved function name");
   expect_rejects("fn bad() -> Void {\n    let value: char = ''\n}\n", "empty character literal");
   expect_rejects("fn bad() -> Void {\n    let value: char = 'ab'\n}\n", "wide character literal");
   expect_rejects("fn bad() -> Void {\n    let value: char = '\\q'\n}\n", "invalid character escape");
@@ -321,6 +353,7 @@ int main(int argc, char **argv) {
   parses_parenthesized_comparisons();
   parses_else_if_chains();
   records_block_open_locations();
+  records_node_token_spans();
   parses_public_declarations_and_extern_types();
   parses_character_literals();
   parses_generic_calls_and_array_repeats();
