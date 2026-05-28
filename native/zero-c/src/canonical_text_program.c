@@ -1036,23 +1036,24 @@ static Stmt *canon_parse_for_after_keyword(CanonAstParser *parser, const ZCanoni
 }
 
 static MatchArm canon_parse_match_arm_ast(CanonAstParser *parser) {
-  size_t pattern_start = parser->pos;
-  size_t open = canon_ast_block_open(parser->tokens, parser->pos);
+  size_t pattern_start = parser->pos, open = canon_ast_block_open(parser->tokens, parser->pos);
+  size_t guard = canon_ast_find_top_level(parser->tokens, pattern_start, open, "if");
+  size_t pattern_end = guard == CANON_AST_NO_INDEX ? open : guard, range = canon_ast_find_top_level(parser->tokens, pattern_start, pattern_end, "..");
   MatchArm arm = {.line = parser->tokens->items[pattern_start].line, .column = parser->tokens->items[pattern_start].column};
-  size_t range = canon_ast_find_top_level(parser->tokens, pattern_start, open, "..");
-  if (canon_ast_token_text(parser->tokens, pattern_start, open, ".")) {
+  if (canon_ast_token_text(parser->tokens, pattern_start, pattern_end, ".")) {
     const ZCanonicalToken *case_name = canon_ast_token(parser->tokens, pattern_start + 1);
     arm.case_name = z_strdup(case_name && case_name->text ? case_name->text : "");
-    if (pattern_start + 2 < open && canon_ast_token_text(parser->tokens, pattern_start + 2, open, "(")) {
+    if (pattern_start + 2 < pattern_end && canon_ast_token_text(parser->tokens, pattern_start + 2, pattern_end, "(")) {
       const ZCanonicalToken *payload = canon_ast_token(parser->tokens, pattern_start + 3);
       if (payload && payload->kind == Z_CANON_TOKEN_WORD) arm.payload_name = z_strdup(payload->text);
     }
   } else if (range != CANON_AST_NO_INDEX) {
     arm.case_name = canon_ast_join_line_tokens(parser->tokens, pattern_start, range);
-    arm.range_end = canon_ast_join_line_tokens(parser->tokens, range + 1, open);
+    arm.range_end = canon_ast_join_line_tokens(parser->tokens, range + 1, pattern_end);
   } else {
-    arm.case_name = canon_ast_join_line_tokens(parser->tokens, pattern_start, open);
+    arm.case_name = canon_ast_join_line_tokens(parser->tokens, pattern_start, pattern_end);
   }
+  if (guard != CANON_AST_NO_INDEX) arm.guard = canon_parse_expr_span(parser->tokens, guard + 1, open, parser->diag);
   parser->pos = open;
   arm.body = canon_parse_block_ast(parser);
   return arm;

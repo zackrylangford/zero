@@ -717,8 +717,9 @@ static bool canon_validate_expr_shape(CanonParser *parser, size_t start, size_t 
       continue;
     }
     if (canon_is_symbol_text(token, "..")) {
-      expect_operand = true;
-      continue;
+      if (bracket_depth == 0 || bracket_literal[bracket_depth]) return canon_fail(parser->diag, token, "range syntax is only valid in slices, loops, and match ranges", "slice range", "..");
+      if (expect_operand && !(previous && canon_is_symbol_text(previous, "["))) return canon_fail(parser->diag, token, "expected slice start before range separator", "slice start expression", "..");
+      expect_operand = true; continue;
     }
     if (canon_is_symbol_text(token, "<")) {
       size_t generic_close = 0;
@@ -787,6 +788,25 @@ static bool canon_validate_expr(CanonParser *parser, size_t start, size_t end) {
     }
   }
   return true;
+}
+
+static bool canon_find_top_level_text_in_range(CanonParser *parser, size_t start, size_t end, const char *text, size_t *index) {
+  int paren = 0, bracket = 0, brace = 0;
+  for (size_t i = start; i < parser->tokens->len && i < end; i++) {
+    const ZCanonicalToken *token = &parser->tokens->items[i];
+    if (token->kind == Z_CANON_TOKEN_EOF || token->kind == Z_CANON_TOKEN_NEWLINE || token->kind == Z_CANON_TOKEN_COMMENT) return false;
+    if (paren == 0 && bracket == 0 && brace == 0 && (canon_is_word_text(token, text) || canon_is_symbol_text(token, text))) {
+      *index = i;
+      return true;
+    }
+    if (canon_is_symbol_text(token, "(")) paren++;
+    else if (canon_is_symbol_text(token, ")")) { if (paren == 0) return false; paren--; }
+    else if (canon_is_symbol_text(token, "[")) bracket++;
+    else if (canon_is_symbol_text(token, "]")) { if (bracket == 0) return false; bracket--; }
+    else if (canon_is_symbol_text(token, "{")) brace++;
+    else if (canon_is_symbol_text(token, "}")) { if (brace == 0) return false; brace--; }
+  }
+  return false;
 }
 
 static bool canon_parse_expr_line(CanonParser *parser, bool allow_empty) {
@@ -937,7 +957,7 @@ static bool canon_expect_statement_end(CanonParser *parser, const char *message)
   return (!token || token->kind == Z_CANON_TOKEN_EOF || token->kind == Z_CANON_TOKEN_NEWLINE || token->kind == Z_CANON_TOKEN_COMMENT || canon_is_symbol_text(token, "}")) ? true : canon_fail(parser->diag, token, message, "line end", token->text);
 }
 
-static bool canon_validate_match_pattern(CanonParser *parser, size_t start, size_t end) {
+static bool canon_validate_match_case_pattern(CanonParser *parser, size_t start, size_t end) {
   if (end > start && canon_is_symbol_text(&parser->tokens->items[start], ".")) {
     if (start + 1 >= end) return canon_fail(parser->diag, &parser->tokens->items[start], "expected match case name", "case name", ".");
     const ZCanonicalToken *name = &parser->tokens->items[start + 1];
@@ -954,7 +974,25 @@ static bool canon_validate_match_pattern(CanonParser *parser, size_t start, size
     if (payload->kind != Z_CANON_TOKEN_WORD || canon_is_reserved_word(payload->text)) return canon_fail(parser->diag, payload, "expected match payload binding", "payload name", payload->text);
     return true;
   }
+  size_t range = 0;
+  if (canon_find_top_level_text_in_range(parser, start, end, "..", &range)) {
+    if (range == start) return canon_fail(parser->diag, &parser->tokens->items[range], "expected match range start", "range start", "..");
+    if (range + 1 >= end) return canon_fail(parser->diag, &parser->tokens->items[range], "expected match range end", "range end", "..");
+    if (!canon_validate_expr(parser, start, range)) return false;
+    return canon_validate_expr(parser, range + 1, end);
+  }
   return canon_validate_expr(parser, start, end);
+}
+
+static bool canon_validate_match_pattern(CanonParser *parser, size_t start, size_t end) {
+  size_t guard = 0;
+  if (!canon_find_top_level_text_in_range(parser, start, end, "if", &guard)) {
+    return canon_validate_match_case_pattern(parser, start, end);
+  }
+  if (guard == start) return canon_fail(parser->diag, &parser->tokens->items[guard], "expected match pattern before guard", "match pattern", "if");
+  if (guard + 1 >= end) return canon_fail(parser->diag, &parser->tokens->items[guard], "expected match guard expression", "guard expression", "if");
+  if (!canon_validate_match_case_pattern(parser, start, guard)) return false;
+  return canon_validate_expr(parser, guard + 1, end);
 }
 
 static bool canon_parse_signature(CanonParser *parser, bool body, size_t depth) {
@@ -996,36 +1034,6 @@ static bool canon_parse_let_or_var(CanonParser *parser) {
   if (!canon_parse_type_until(parser, "=", NULL)) return false;
   if (!canon_expect_symbol(parser, "=", "expected binding initializer")) return false;
   return canon_parse_expr_line(parser, false);
-}
-
-static bool canon_find_top_level_symbol_in_range(CanonParser *parser, size_t start, size_t end, const char *symbol, size_t *index) {
-  int paren = 0, bracket = 0, brace = 0;
-  for (size_t i = start; i < parser->tokens->len && i < end; i++) {
-    const ZCanonicalToken *token = &parser->tokens->items[i];
-    if (token->kind == Z_CANON_TOKEN_EOF || token->kind == Z_CANON_TOKEN_NEWLINE || token->kind == Z_CANON_TOKEN_COMMENT) return false;
-    if (paren == 0 && bracket == 0 && brace == 0 && canon_is_symbol_text(token, symbol)) {
-      *index = i;
-      return true;
-    }
-    if (canon_is_symbol_text(token, "(")) paren++;
-    else if (canon_is_symbol_text(token, ")")) {
-      if (paren == 0) return false;
-      paren--;
-    } else if (canon_is_symbol_text(token, "[")) bracket++;
-    else if (canon_is_symbol_text(token, "]")) {
-      if (bracket == 0) return false;
-      bracket--;
-    } else if (canon_is_symbol_text(token, "{")) brace++;
-    else if (canon_is_symbol_text(token, "}")) {
-      if (brace == 0) return false;
-      brace--;
-    }
-  }
-  return false;
-}
-
-static bool canon_find_top_level_symbol(CanonParser *parser, size_t start, const char *symbol, size_t *index) {
-  return canon_find_top_level_symbol_in_range(parser, start, parser->tokens->len, symbol, index);
 }
 
 static bool canon_find_matching_delimiter(CanonParser *parser, size_t open_index, size_t end, size_t *close_index) {
@@ -1092,7 +1100,7 @@ static bool canon_validate_assignment_target(CanonParser *parser, size_t start, 
 static bool canon_parse_assignment_or_expr_line(CanonParser *parser) {
   size_t start = parser->pos;
   size_t equals = 0;
-  if (canon_find_top_level_symbol(parser, start, "=", &equals)) {
+  if (canon_find_top_level_text_in_range(parser, start, parser->tokens->len, "=", &equals)) {
     if (!canon_validate_assignment_target(parser, start, equals)) return false;
     parser->pos = equals + 1;
     return canon_parse_expr_line(parser, false);
@@ -1173,13 +1181,13 @@ static bool canon_parse_statement(CanonParser *parser, size_t depth) {
     if (!canon_parse_until(parser, "{", NULL, false, false)) return false;
     size_t expr_end = parser->pos;
     size_t range = 0;
-    if (!canon_find_top_level_symbol_in_range(parser, expr_start, expr_end, "..", &range)) {
+    if (!canon_find_top_level_text_in_range(parser, expr_start, expr_end, "..", &range)) {
       return canon_fail(parser->diag, expr_start < expr_end ? &parser->tokens->items[expr_start] : canon_peek(parser), "expected '..' in range loop", "range expression", "missing '..'");
     }
     if (range == expr_start) return canon_fail(parser->diag, &parser->tokens->items[range], "expected range start expression", "range start", "..");
     if (range + 1 >= expr_end) return canon_fail(parser->diag, &parser->tokens->items[range], "expected range end expression", "range end", "..");
     size_t extra_range = 0;
-    if (canon_find_top_level_symbol_in_range(parser, range + 1, expr_end, "..", &extra_range)) return canon_fail(parser->diag, &parser->tokens->items[extra_range], "range loop uses one '..'", "single range separator", "..");
+    if (canon_find_top_level_text_in_range(parser, range + 1, expr_end, "..", &extra_range)) return canon_fail(parser->diag, &parser->tokens->items[extra_range], "range loop uses one '..'", "single range separator", "..");
     if (!canon_validate_expr(parser, expr_start, range)) return false;
     if (!canon_validate_expr(parser, range + 1, expr_end)) return false;
     return canon_finish_statement(parser, node_index, canon_parse_block(parser, depth));

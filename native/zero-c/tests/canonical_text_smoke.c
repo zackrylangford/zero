@@ -880,6 +880,28 @@ static void parses_checks_and_graph_roundtrips_rescue_operand(void) {
   expect_program_checks_and_roundtrips(source, "canonical rescue operand", true);
 }
 
+static void parses_checks_and_graph_roundtrips_match_guards(void) {
+  const char *source =
+    "fn bucket(value: u8, enabled: Bool) -> i32 {\n"
+    "    match value {\n"
+    "        0 if enabled {\n"
+    "            return 10\n"
+    "        }\n"
+    "        0 {\n"
+    "            return 11\n"
+    "        }\n"
+    "        1..3 {\n"
+    "            return 20\n"
+    "        }\n"
+    "        4..255 {\n"
+    "            return 30\n"
+    "        }\n"
+    "    }\n"
+    "    return 0\n"
+    "}\n";
+  expect_program_checks_and_roundtrips(source, "canonical match guards", true);
+}
+
 static void rejects_noncanonical_spellings(void) {
   expect_format_rejects_without_diag("fn ok() -> Void {}\n123abc\n", "formatter rejects malformed trailing input without diag");
   expect_rejects("fun main() -> Void {}\n", "fun keyword");
@@ -956,6 +978,7 @@ static void rejects_noncanonical_spellings(void) {
   expect_rejects("fn bad() -> Void {\n    let bytes: [4, 5]u8 = [0_u8; 4]\n}\n", "comma in array type length");
   expect_rejects("fn bad() -> Void {\n    let bytes: [4]u8 = [0_u8; 4, 5]\n}\n", "comma after array repeat count");
   expect_rejects("fn bad() -> Void {\n    let bytes: [4]u8 = [0_u8, 1_u8; 4]\n}\n", "mixed array literal and repeat");
+  expect_rejects("fn bad() -> Void {\n    let value: i32 = 1..4\n}\n", "range expression outside range syntax");
   expect_rejects("use \"not-module\"\n", "string use import");
   expect_rejects("use std.mem()\n", "call use import");
   expect_rejects("use std.\n", "trailing use import separator");
@@ -1018,6 +1041,7 @@ int main(int argc, char **argv) {
   parses_checks_and_graph_roundtrips_library_program();
   parses_checks_and_graph_roundtrips_generic_shape_literal();
   parses_checks_and_graph_roundtrips_rescue_operand();
+  parses_checks_and_graph_roundtrips_match_guards();
   rejects_noncanonical_spellings();
   for (int i = 1; i + 1 < argc; i += 2) parse_file_arg(argv[i], argv[i + 1]);
   printf("canonical text smoke ok\n");
