@@ -3,15 +3,18 @@
 #include <stdlib.h>
 
 typedef struct {
+  const ZCanonicalTokenVec *tokens;
   ZBuf *out;
+  bool *compact_angles;
   const ZCanonicalToken *previous;
   const ZCanonicalToken *line_first;
   size_t indent;
   bool line_start;
   bool line_has_assignment;
-  bool multiline_braces[256];
-  bool list_braces[256];
+  bool *multiline_braces;
+  bool *list_braces;
   size_t brace_depth;
+  size_t brace_cap;
 } CanonFormat;
 
 static bool fmt_text_eq(const char *left, const char *right) {
@@ -29,10 +32,6 @@ static bool fmt_is_symbol(const ZCanonicalToken *token, const char *text) {
 
 static bool fmt_is_word(const ZCanonicalToken *token, const char *text) {
   return token && token->kind == Z_CANON_TOKEN_WORD && fmt_text_eq(token->text, text);
-}
-
-static bool fmt_connected(const ZCanonicalToken *left, const ZCanonicalToken *right) {
-  return left && right && left->offset + left->length == right->offset;
 }
 
 static void fmt_append_char(ZBuf *out, char ch) {
@@ -75,6 +74,86 @@ static const ZCanonicalToken *fmt_next_significant(const ZCanonicalTokenVec *tok
   return NULL;
 }
 
+static bool fmt_angle_tail_allows_compact(const ZCanonicalToken *token) {
+  if (!token || token->kind == Z_CANON_TOKEN_EOF || token->kind == Z_CANON_TOKEN_NEWLINE || token->kind == Z_CANON_TOKEN_COMMENT) return true;
+  if (fmt_is_word(token, "raises")) return true;
+  return fmt_is_symbol(token, "(") || fmt_is_symbol(token, "{") || fmt_is_symbol(token, "[") ||
+    fmt_is_symbol(token, ")") || fmt_is_symbol(token, "}") || fmt_is_symbol(token, "]") ||
+    fmt_is_symbol(token, ",") || fmt_is_symbol(token, "=") || fmt_is_symbol(token, "->") ||
+    fmt_is_symbol(token, ">");
+}
+
+static bool fmt_find_matching_angle(const ZCanonicalTokenVec *tokens, size_t open_index, size_t *close_index) {
+  size_t depth = 0;
+  for (size_t i = open_index; i < tokens->len; i++) {
+    const ZCanonicalToken *token = &tokens->items[i];
+    if (token->kind == Z_CANON_TOKEN_EOF || token->kind == Z_CANON_TOKEN_NEWLINE || token->kind == Z_CANON_TOKEN_COMMENT) break;
+    if (fmt_is_symbol(token, "<")) {
+      depth++;
+      continue;
+    }
+    if (!fmt_is_symbol(token, ">")) continue;
+    if (depth == 0) return false;
+    depth--;
+    if (depth == 0) {
+      *close_index = i;
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool *fmt_build_compact_angles(const ZCanonicalTokenVec *tokens) {
+  if (!tokens || tokens->len == 0) return NULL;
+  bool *compact = z_checked_reallocarray(NULL, tokens->len, sizeof(bool));
+  for (size_t i = 0; i < tokens->len; i++) compact[i] = false;
+  for (size_t i = 1; i < tokens->len; i++) {
+    const ZCanonicalToken *token = &tokens->items[i];
+    const ZCanonicalToken *previous = &tokens->items[i - 1];
+    if (!fmt_is_symbol(token, "<") || previous->kind != Z_CANON_TOKEN_WORD) continue;
+    size_t close = 0;
+    if (!fmt_find_matching_angle(tokens, i, &close) || close == i + 1) continue;
+    const ZCanonicalToken *tail = close + 1 < tokens->len ? &tokens->items[close + 1] : NULL;
+    if (!fmt_angle_tail_allows_compact(tail)) continue;
+    compact[i] = true;
+    compact[close] = true;
+  }
+  return compact;
+}
+
+static bool fmt_token_is_compact_angle(const CanonFormat *fmt, const ZCanonicalToken *token) {
+  if (!fmt || !fmt->tokens || !fmt->compact_angles || !token || (!fmt_is_symbol(token, "<") && !fmt_is_symbol(token, ">"))) return false;
+  size_t index = (size_t)(token - fmt->tokens->items);
+  return index < fmt->tokens->len && fmt->compact_angles[index];
+}
+
+static bool fmt_compact_angle_pair(const CanonFormat *fmt, const ZCanonicalToken *left, const ZCanonicalToken *right) {
+  if (!left || !right) return false;
+  if (fmt_token_is_compact_angle(fmt, right)) return true;
+  if (fmt_token_is_compact_angle(fmt, left) && fmt_is_symbol(left, "<")) return true;
+  return fmt_token_is_compact_angle(fmt, left) && fmt_is_symbol(left, ">") && (fmt_is_symbol(right, ">") || fmt_is_symbol(right, "("));
+}
+
+static void fmt_push_brace(CanonFormat *fmt, bool multiline, bool list) {
+  if (fmt->brace_depth == fmt->brace_cap) {
+    size_t next_cap = z_grow_capacity(fmt->brace_cap, fmt->brace_depth + 1, 64);
+    fmt->multiline_braces = z_checked_reallocarray(fmt->multiline_braces, next_cap, sizeof(bool));
+    fmt->list_braces = z_checked_reallocarray(fmt->list_braces, next_cap, sizeof(bool));
+    fmt->brace_cap = next_cap;
+  }
+  fmt->multiline_braces[fmt->brace_depth] = multiline;
+  fmt->list_braces[fmt->brace_depth] = list;
+  fmt->brace_depth++;
+}
+
+static bool fmt_current_multiline_brace(const CanonFormat *fmt) {
+  return fmt->brace_depth > 0 && fmt->multiline_braces[fmt->brace_depth - 1];
+}
+
+static bool fmt_current_list_brace(const CanonFormat *fmt) {
+  return fmt->brace_depth > 0 && fmt->list_braces[fmt->brace_depth - 1];
+}
+
 static bool fmt_starts_declaration(const ZCanonicalToken *token) {
   return fmt_is_word(token, "use") || fmt_is_word(token, "extern") || fmt_is_word(token, "const") ||
     fmt_is_word(token, "alias") || fmt_is_word(token, "type") || fmt_is_word(token, "packed") ||
@@ -109,22 +188,17 @@ static bool fmt_operator(const ZCanonicalToken *token) {
     fmt_is_symbol(token, "+|");
 }
 
-static bool fmt_compact_angle(const ZCanonicalToken *left, const ZCanonicalToken *right) {
-  return (fmt_is_symbol(left, "<") || fmt_is_symbol(right, "<") || fmt_is_symbol(left, ">") || fmt_is_symbol(right, ">")) &&
-    fmt_connected(left, right);
-}
-
 static bool fmt_space_before(const CanonFormat *fmt, const ZCanonicalToken *token) {
   const ZCanonicalToken *prev = fmt->previous;
   if (!prev || fmt->line_start) return false;
   if (fmt_is_symbol(token, ",") || fmt_is_symbol(token, ":") || fmt_is_symbol(token, ";") || fmt_is_symbol(token, ")") || fmt_is_symbol(token, "]")) return false;
   if (fmt_is_symbol(token, "}")) return !fmt_is_symbol(prev, "{");
   if (fmt_is_symbol(token, ".") || fmt_is_symbol(prev, ".")) return false;
-  if ((fmt_is_symbol(token, "..") || fmt_is_symbol(prev, "..")) && fmt_connected(prev, token)) return false;
-  if (fmt_is_symbol(prev, "&") && fmt_connected(prev, token)) return false;
-  if (fmt_connected(prev, token) && fmt_is_symbol(prev, "]")) return false;
+  if (fmt_is_symbol(token, "..") || fmt_is_symbol(prev, "..")) return false;
+  if (fmt_is_symbol(prev, "&")) return false;
+  if (fmt_compact_angle_pair(fmt, prev, token)) return false;
   if (fmt_is_symbol(token, "(")) {
-    if (fmt_is_symbol(prev, ">") && fmt_connected(prev, token)) return false;
+    if (fmt_is_symbol(prev, "]")) return false;
     if (prev->kind == Z_CANON_TOKEN_WORD && !fmt_is_word(prev, "if") && !fmt_is_word(prev, "while") &&
         !fmt_is_word(prev, "for") && !fmt_is_word(prev, "match") && !fmt_is_word(prev, "return") &&
         !fmt_is_word(prev, "check") && !fmt_is_word(prev, "expect") && !fmt_is_word(prev, "rescue")) return false;
@@ -135,8 +209,7 @@ static bool fmt_space_before(const CanonFormat *fmt, const ZCanonicalToken *toke
     if (prev->kind == Z_CANON_TOKEN_WORD || fmt_is_symbol(prev, ")") || fmt_is_symbol(prev, "]")) return false;
     return !(fmt_is_symbol(prev, "(") || fmt_is_symbol(prev, "[") || fmt_is_symbol(prev, "<"));
   }
-  if (fmt_compact_angle(prev, token)) return false;
-  if (fmt_is_symbol(prev, "(") || fmt_is_symbol(prev, "[") || fmt_is_symbol(prev, "<")) return false;
+  if (fmt_is_symbol(prev, "(") || fmt_is_symbol(prev, "[")) return false;
   if (fmt_is_symbol(token, "{")) return true;
   if (fmt_is_symbol(prev, "{")) return true;
   if (fmt_operator(prev) || fmt_operator(token) || fmt_is_symbol(token, "<") || fmt_is_symbol(token, ">") || fmt_is_symbol(prev, ":") || fmt_is_symbol(prev, ",") || fmt_is_symbol(prev, ";")) return true;
@@ -154,7 +227,7 @@ static void fmt_emit_token(CanonFormat *fmt, const ZCanonicalToken *token) {
 
 bool z_canonical_text_format(const ZCanonicalTokenVec *tokens, ZBuf *out, ZDiag *diag) {
   if (!tokens || !out) return false;
-  CanonFormat fmt = {.out = out, .line_start = true};
+  CanonFormat fmt = {.tokens = tokens, .out = out, .compact_angles = fmt_build_compact_angles(tokens), .line_start = true};
   for (size_t i = 0; i < tokens->len; i++) {
     const ZCanonicalToken *token = &tokens->items[i];
     if (token->kind == Z_CANON_TOKEN_EOF) break;
@@ -175,11 +248,7 @@ bool z_canonical_text_format(const ZCanonicalTokenVec *tokens, ZBuf *out, ZDiag 
     if (fmt_is_symbol(token, "{")) {
       const ZCanonicalToken *next = fmt_next_significant(tokens, i);
       bool multiline = next && !fmt_is_symbol(next, "}") && fmt_line_opens_multiline_brace(&fmt);
-      if (fmt.brace_depth < sizeof(fmt.multiline_braces) / sizeof(fmt.multiline_braces[0])) {
-        fmt.brace_depth++;
-        fmt.multiline_braces[fmt.brace_depth] = multiline;
-        fmt.list_braces[fmt.brace_depth] = multiline && fmt_line_opens_list_brace(&fmt);
-      }
+      fmt_push_brace(&fmt, multiline, multiline && fmt_line_opens_list_brace(&fmt));
       fmt_emit_token(&fmt, token);
       if (multiline) {
         fmt.indent++;
@@ -188,7 +257,7 @@ bool z_canonical_text_format(const ZCanonicalTokenVec *tokens, ZBuf *out, ZDiag 
       continue;
     }
     if (fmt_is_symbol(token, "}")) {
-      bool multiline = fmt.brace_depth > 0 && fmt.multiline_braces[fmt.brace_depth];
+      bool multiline = fmt_current_multiline_brace(&fmt);
       if (multiline) {
         if (!fmt.line_start) fmt_newline(&fmt);
         if (fmt.indent > 0) fmt.indent--;
@@ -202,7 +271,7 @@ bool z_canonical_text_format(const ZCanonicalTokenVec *tokens, ZBuf *out, ZDiag 
       }
       continue;
     }
-    if (fmt_is_symbol(token, ",") && fmt.brace_depth > 0 && fmt.list_braces[fmt.brace_depth]) {
+    if (fmt_is_symbol(token, ",") && fmt_current_list_brace(&fmt)) {
       fmt_emit_token(&fmt, token);
       const ZCanonicalToken *next = fmt_next_significant(tokens, i);
       if (next && !fmt_is_symbol(next, "}")) fmt_newline(&fmt);
@@ -211,6 +280,9 @@ bool z_canonical_text_format(const ZCanonicalTokenVec *tokens, ZBuf *out, ZDiag 
     fmt_emit_token(&fmt, token);
   }
   fmt_newline(&fmt);
+  free(fmt.compact_angles);
+  free(fmt.multiline_braces);
+  free(fmt.list_braces);
   (void)diag;
   return true;
 }

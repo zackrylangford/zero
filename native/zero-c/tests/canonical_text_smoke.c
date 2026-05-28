@@ -43,6 +43,20 @@ static void expect(bool ok, const char *message) {
   exit(1);
 }
 
+static void smoke_append_char(ZBuf *buf, char ch) {
+  size_t required = buf->len + 2;
+  if (required > buf->cap) {
+    buf->cap = z_grow_capacity(buf->cap, required, 64);
+    buf->data = z_checked_reallocarray(buf->data, buf->cap, sizeof(char));
+  }
+  buf->data[buf->len++] = ch;
+  buf->data[buf->len] = 0;
+}
+
+static void smoke_append(ZBuf *buf, const char *text) {
+  while (text && *text) smoke_append_char(buf, *text++);
+}
+
 static char *read_text_file(const char *path) {
   FILE *file = fopen(path, "rb");
   expect(file != NULL, "failed to open fixture");
@@ -201,6 +215,46 @@ static void formats_core_declarations_and_blocks(void) {
     "    }\n"
     "}\n";
   expect_formats_to(source, expected, "core declaration formatting");
+}
+
+static void formats_angles_comparisons_and_ranges_canonically(void) {
+  const char *source =
+    "type Box < T > {value:T,}\n"
+    "fn compare < T > (value:i32,limit:i32,bytes:MutSpan < u8 >)->Void{\n"
+    "if value<limit{return}\n"
+    "if value >limit{return}\n"
+    "for item in 0 .. 4{return}\n"
+    "let box:Box < i32 > = Box<i32>{value:value}\n"
+    "}\n";
+  const char *expected =
+    "type Box<T> {\n"
+    "    value: T,\n"
+    "}\n"
+    "\n"
+    "fn compare<T>(value: i32, limit: i32, bytes: MutSpan<u8>) -> Void {\n"
+    "    if value < limit {\n"
+    "        return\n"
+    "    }\n"
+    "    if value > limit {\n"
+    "        return\n"
+    "    }\n"
+    "    for item in 0..4 {\n"
+    "        return\n"
+    "    }\n"
+    "    let box: Box<i32> = Box<i32> { value: value }\n"
+    "}\n";
+  expect_formats_to(source, expected, "angle, comparison, and range formatting");
+}
+
+static void formats_deep_nested_blocks(void) {
+  ZBuf source = {0};
+  smoke_append(&source, "fn deep(flag: Bool) -> Void {\n");
+  for (size_t i = 0; i < 260; i++) smoke_append(&source, "if flag {\n");
+  smoke_append(&source, "return\n");
+  for (size_t i = 0; i < 260; i++) smoke_append(&source, "}\n");
+  smoke_append(&source, "}\n");
+  expect_format_roundtrip(source.data ? source.data : "", "deep nested block formatting");
+  free(source.data);
 }
 
 static void parses_fallibility_choices_and_interfaces(void) {
@@ -668,6 +722,8 @@ static void parse_file_arg(const char *mode, const char *path) {
 int main(int argc, char **argv) {
   parses_declarations_and_blocks();
   formats_core_declarations_and_blocks();
+  formats_angles_comparisons_and_ranges_canonically();
+  formats_deep_nested_blocks();
   parses_fallibility_choices_and_interfaces();
   parses_nested_generic_type_commas();
   parses_separate_boolean_comparisons();
